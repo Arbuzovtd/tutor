@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     telegram_webhook_url: str | None = None
     telegram_webhook_secret: SecretStr | None = None
 
-    database_url: str = "postgresql+asyncpg://tutorbot:tutorbot@localhost:5433/tutorbot"
-    test_database_url: str = "postgresql+asyncpg://tutorbot:tutorbot@localhost:5433/tutorbot_test"
+    database_url: str = "postgresql+asyncpg://tutorbot:tutorbot@localhost:5432/tutorbot"
+    test_database_url: str = "postgresql+asyncpg://tutorbot:tutorbot@localhost:5432/tutorbot_test"
 
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o"

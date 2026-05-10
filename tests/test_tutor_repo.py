@@ -12,6 +12,7 @@ async def test_get_or_create_creates_when_missing(db_session):
     assert tutor.telegram_user_id == 12345
     assert tutor.disclosure_mode == "pretend"  # default per project decision
     assert tutor.is_active is True
+    assert tutor.is_registered is False  # only flips True after onboarding FSM completes
 
 
 async def test_get_or_create_returns_existing(db_session):

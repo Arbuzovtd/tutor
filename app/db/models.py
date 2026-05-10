@@ -36,6 +36,7 @@ class Tutor(Base):
     timezone: Mapped[str] = mapped_column(String(50), default="Europe/Moscow")
     disclosure_mode: Mapped[str] = mapped_column(String(20), default="pretend")
     onboarding_status: Mapped[str] = mapped_column(String(30), default="started")
+    is_registered: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
