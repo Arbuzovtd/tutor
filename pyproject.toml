@@ -11,6 +11,7 @@ dependencies = [
     "cryptography>=48.0.0",
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
+    "openai>=2.36.0",
     "pydantic-settings>=2.14.1",
     "python-dotenv>=1.2.2",
     "sentry-sdk[fastapi]>=2.59.0",
