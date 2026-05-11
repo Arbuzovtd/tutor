@@ -1,11 +1,11 @@
 """Reschedule Decision Engine — entry point for incoming business_message updates.
 
-Responsibilities (built up across TDD cycles):
-1. Idempotency: dedupe Telegram retries by (business_connection_id, telegram_message_id)
-2. Student identification: find or create Student by Telegram user id
-3. Handoff detection: stay silent if the tutor recently replied themselves
-4. Intent parsing → calendar action → reply
-5. Low-confidence: queue draft for tutor review
+Tutor-in-the-loop flow: on a high-confidence intent the bot
+1) sends a short ack to the student in the business chat,
+2) pings the tutor in their private chat with the bot with inline buttons.
+
+The router is the only place that calls Telegram APIs. The engine returns
+structured data describing what should be sent where; the router does the I/O.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.types import IntentKind, IntentResult
 from app.db.models import Tutor
+from app.db.repositories.audit_log import AuditLogRepository
 from app.db.repositories.business_connection import BusinessConnectionRepository
 from app.db.repositories.chat_message import ChatMessageRepository
 from app.db.repositories.student import StudentRepository
@@ -26,9 +27,9 @@ HANDOFF_WINDOW = timedelta(minutes=60)
 # Below this, intents are queued for tutor review instead of auto-replied.
 INTENT_CONFIDENCE_THRESHOLD = 0.7
 
-# Stub replies for cycle 4 — replaced with calendar-aware text in cycle 5.
-_STUB_RESCHEDULE_REPLY = "Понял, сейчас уточню расписание и вернусь через минуту."
-_STUB_CANCEL_REPLY = "Принял, проверю отмену и подтвержу."
+# Acks sent to the student while we wait for the tutor's confirmation.
+_RESCHEDULE_ACK = "Сейчас уточню расписание и вернусь через пару минут."
+_CANCEL_ACK = "Сейчас уточню и подтвержу отмену."
 
 
 class IntentParserProtocol(Protocol):
@@ -36,14 +37,48 @@ class IntentParserProtocol(Protocol):
 
 
 @dataclass(frozen=True)
-class HandleResult:
-    """What the bot will do with this message.
+class TutorNotification:
+    """Everything the router needs to ping the tutor in their DM with the bot.
 
-    `reply_text` None means "stay silent". `action` is a stable string for audit.
+    `chat_message_id` is the inbound row id and serves as the lookup key when
+    the tutor taps an inline button later (callback_data = "approve:{id}" etc).
     """
 
+    tutor_telegram_id: int
+    text: str
+    chat_message_id: int
+
+
+@dataclass(frozen=True)
+class HandleResult:
     action: str
     reply_text: str | None = None
+    tutor_notification: TutorNotification | None = None
+
+
+def _format_tutor_ping(
+    *,
+    student_name: str | None,
+    student_id: int,
+    intent_kind: IntentKind,
+    raw_text: str,
+    target_dt: datetime | None,
+    new_dt: datetime | None,
+) -> str:
+    name = student_name or f"ученик #{student_id}"
+    action_human = {
+        IntentKind.RESCHEDULE: "перенос занятия",
+        IntentKind.CANCEL: "отмена занятия",
+    }.get(intent_kind, intent_kind.value)
+    lines = [
+        f"🔔 {name}: «{raw_text}»",
+        f"Понял как: {action_human}.",
+    ]
+    if target_dt is not None:
+        lines.append(f"С: {target_dt.strftime('%d.%m %H:%M')}")
+    if new_dt is not None:
+        lines.append(f"На: {new_dt.strftime('%d.%m %H:%M')}")
+    return "\n".join(lines)
 
 
 async def handle_business_message(
@@ -86,7 +121,7 @@ async def handle_business_message(
         telegram_user_id=from_user_id,
         telegram_chat_id=chat_id,
     )
-    await msg_repo.record_inbound(
+    inbound = await msg_repo.record_inbound(
         tutor_id=tutor.id,
         business_connection_id=connection_id,
         telegram_message_id=telegram_message_id,
@@ -105,28 +140,47 @@ async def handle_business_message(
     intent = await parser.parse(text, current_datetime=now)
     high_conf = intent.confidence >= INTENT_CONFIDENCE_THRESHOLD
 
-    if high_conf and intent.kind == IntentKind.RESCHEDULE:
-        await msg_repo.record_outbound(
-            tutor_id=tutor.id,
-            business_connection_id=connection_id,
-            text=_STUB_RESCHEDULE_REPLY,
-            direction="outbound_bot",
-            student_id=student.id,
-            intent=intent.kind.value,
-            confidence=intent.confidence,
-        )
-        return HandleResult(action="reschedule_pending", reply_text=_STUB_RESCHEDULE_REPLY)
+    if high_conf and intent.kind in (IntentKind.RESCHEDULE, IntentKind.CANCEL):
+        ack = _RESCHEDULE_ACK if intent.kind == IntentKind.RESCHEDULE else _CANCEL_ACK
+        action = "reschedule_pending" if intent.kind == IntentKind.RESCHEDULE else "cancel_pending"
 
-    if high_conf and intent.kind == IntentKind.CANCEL:
         await msg_repo.record_outbound(
             tutor_id=tutor.id,
             business_connection_id=connection_id,
-            text=_STUB_CANCEL_REPLY,
+            text=ack,
             direction="outbound_bot",
             student_id=student.id,
             intent=intent.kind.value,
             confidence=intent.confidence,
         )
-        return HandleResult(action="cancel_pending", reply_text=_STUB_CANCEL_REPLY)
+        await AuditLogRepository(session).log(
+            tutor_id=tutor.id,
+            action="pending_review",
+            payload={
+                "chat_message_id": inbound.id,
+                "student_id": student.id,
+                "intent": intent.kind.value,
+                "confidence": intent.confidence,
+                "target_datetime": intent.target_datetime.isoformat()
+                if intent.target_datetime
+                else None,
+                "new_datetime": intent.new_datetime.isoformat()
+                if intent.new_datetime
+                else None,
+            },
+        )
+        notification = TutorNotification(
+            tutor_telegram_id=tutor.telegram_user_id,
+            chat_message_id=inbound.id,
+            text=_format_tutor_ping(
+                student_name=student.name,
+                student_id=student.id,
+                intent_kind=intent.kind,
+                raw_text=text,
+                target_dt=intent.target_datetime,
+                new_dt=intent.new_datetime,
+            ),
+        )
+        return HandleResult(action=action, reply_text=ack, tutor_notification=notification)
 
     return HandleResult(action="needs_tutor_review")

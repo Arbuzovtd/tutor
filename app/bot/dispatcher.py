@@ -12,6 +12,7 @@ from app.bot.deps import build_intent_parser
 from app.bot.middlewares.db import DbSessionMiddleware
 from app.bot.routers import business as business_router
 from app.bot.routers import onboarding as onboarding_router
+from app.bot.routers import review as review_router
 from app.bot.routers import tutor_cmds as tutor_cmds_router
 from app.config import get_settings
 from app.db.session import AsyncSessionLocal
@@ -55,6 +56,7 @@ def make_dispatcher() -> Dispatcher:
     # business handlers (separate update types so order is incidental there).
     dp.include_router(tutor_cmds_router.router)
     dp.include_router(onboarding_router.router)
+    dp.include_router(review_router.router)
     dp.include_router(business_router.router)
 
     return dp

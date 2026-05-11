@@ -364,6 +364,108 @@ async def test_unknown_intent_routes_to_review(db_session):
     assert result.reply_text is None
 
 
+async def test_high_confidence_reschedule_includes_tutor_notification(db_session):
+    """Cycle: tutor-in-the-loop. reschedule_pending must carry a TutorNotification
+    pointing to the tutor's Telegram user id and the inbound chat_message id."""
+    from datetime import timezone as _tz
+
+    from sqlalchemy import select
+
+    from app.db.models import AuditLog, ChatMessage
+
+    tutor = await _make_connected_tutor(db_session, tg_id=9101, conn_id="conn_rN")
+    stub = _StubParser(
+        IntentResult(
+            kind=IntentKind.RESCHEDULE,
+            confidence=0.92,
+            target_datetime=datetime(2026, 5, 15, 15, 0, tzinfo=_tz.utc),
+            new_datetime=datetime(2026, 5, 16, 18, 0, tzinfo=_tz.utc),
+            raw_text="перенеси на следующий день в 18",
+        )
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_rN",
+        telegram_message_id=500,
+        from_user_id=88001,
+        chat_id=88001,
+        text="перенеси на следующий день в 18",
+        now=NOW,
+        parser=stub,
+    )
+
+    assert result.action == "reschedule_pending"
+    assert result.tutor_notification is not None
+    assert result.tutor_notification.tutor_telegram_id == 9101
+
+    # Notification text mentions both old and new dates
+    assert "15.05" in result.tutor_notification.text
+    assert "16.05" in result.tutor_notification.text
+
+    # chat_message_id points to the persisted inbound row
+    inbound = (
+        await db_session.execute(
+            select(ChatMessage).where(
+                ChatMessage.business_connection_id == "conn_rN",
+                ChatMessage.direction == "inbound",
+            )
+        )
+    ).scalar_one()
+    assert result.tutor_notification.chat_message_id == inbound.id
+
+    # Audit log has a pending_review entry tied to the same chat_message_id
+    audit = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.tutor_id == tutor.id, AuditLog.action == "pending_review"
+            )
+        )
+    ).scalar_one()
+    assert audit.payload_json["chat_message_id"] == inbound.id
+    assert audit.payload_json["intent"] == "reschedule"
+
+
+async def test_high_confidence_cancel_includes_tutor_notification(db_session):
+    tutor = await _make_connected_tutor(db_session, tg_id=9102, conn_id="conn_cN")
+    stub = _StubParser(
+        IntentResult(kind=IntentKind.CANCEL, confidence=0.85, raw_text="отмени сегодняшнее")
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_cN",
+        telegram_message_id=501,
+        from_user_id=88002,
+        chat_id=88002,
+        text="отмени сегодняшнее",
+        now=NOW,
+        parser=stub,
+    )
+    assert result.action == "cancel_pending"
+    assert result.tutor_notification is not None
+    assert result.tutor_notification.tutor_telegram_id == 9102
+    assert "отмена" in result.tutor_notification.text.lower()
+
+
+async def test_low_confidence_has_no_tutor_notification(db_session):
+    """needs_tutor_review path: no auto-action, no tutor ping either."""
+    tutor = await _make_connected_tutor(db_session, tg_id=9103, conn_id="conn_lcN")
+    stub = _StubParser(
+        IntentResult(kind=IntentKind.RESCHEDULE, confidence=0.4, raw_text="мб завтра?")
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_lcN",
+        telegram_message_id=502,
+        from_user_id=88003,
+        chat_id=88003,
+        text="мб завтра?",
+        now=NOW,
+        parser=stub,
+    )
+    assert result.action == "needs_tutor_review"
+    assert result.tutor_notification is None
+
+
 async def test_question_intent_routes_to_review(db_session):
     """Cycle 4: QUESTION intent → silent (we don't auto-answer subject questions)."""
     tutor = await _make_connected_tutor(db_session, tg_id=9005, conn_id="conn_q")

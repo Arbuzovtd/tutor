@@ -16,6 +16,7 @@ from aiogram import Router
 from aiogram.types import BusinessConnection, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.routers.review import build_review_keyboard
 from app.db.repositories.business_connection import BusinessConnectionRepository
 from app.db.repositories.tutor import TutorRepository
 from app.services.reschedule import IntentParserProtocol, handle_business_message
@@ -91,3 +92,20 @@ async def on_business_message(
             business_connection_id=message.business_connection_id,
             text=result.reply_text,
         )
+
+    if result.tutor_notification is not None:
+        try:
+            await message.bot.send_message(
+                chat_id=result.tutor_notification.tutor_telegram_id,
+                text=result.tutor_notification.text,
+                reply_markup=build_review_keyboard(
+                    result.tutor_notification.chat_message_id
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Tutor may not have started a chat with the bot yet (no DM possible).
+            log.warning(
+                "could not ping tutor tg_id=%s: %s",
+                result.tutor_notification.tutor_telegram_id,
+                exc,
+            )
