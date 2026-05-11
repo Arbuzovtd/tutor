@@ -10,7 +10,7 @@ Responsibilities (built up across TDD cycles):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,9 @@ from app.db.models import Tutor
 from app.db.repositories.business_connection import BusinessConnectionRepository
 from app.db.repositories.chat_message import ChatMessageRepository
 from app.db.repositories.student import StudentRepository
+
+# Window during which a tutor's manual reply silences the bot in this chat.
+HANDOFF_WINDOW = timedelta(minutes=60)
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,17 @@ async def handle_business_message(
     if await msg_repo.exists_by_telegram_msg(connection_id, telegram_message_id):
         return HandleResult(action="duplicate_ignored")
 
+    # Tutor typing in their own client → record as outbound_tutor, no Student row.
+    if from_user_id == tutor.telegram_user_id:
+        await msg_repo.record_outbound(
+            tutor_id=tutor.id,
+            business_connection_id=connection_id,
+            text=text,
+            direction="outbound_tutor",
+            telegram_message_id=telegram_message_id,
+        )
+        return HandleResult(action="tutor_outbound")
+
     student, _ = await StudentRepository(session).get_or_create_by_telegram_id(
         tutor_id=tutor.id,
         telegram_user_id=from_user_id,
@@ -66,4 +80,10 @@ async def handle_business_message(
         text=text,
         student_id=student.id,
     )
+
+    # Handoff: if tutor manually replied in this chat within the window, stay silent.
+    last_tutor_at = await msg_repo.last_tutor_outbound_at(connection_id)
+    if last_tutor_at is not None and now - last_tutor_at < HANDOFF_WINDOW:
+        return HandleResult(action="tutor_handoff")
+
     return HandleResult(action="received")

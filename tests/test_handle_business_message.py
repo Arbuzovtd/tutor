@@ -6,7 +6,7 @@ intent routing, and calendar actions.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.db.repositories.business_connection import BusinessConnectionRepository
 from app.db.repositories.chat_message import ChatMessageRepository
@@ -148,6 +148,113 @@ async def test_first_message_creates_student_and_links_chat_message(db_session):
         )
     ).scalar_one()
     assert chat_msg.student_id == student.id
+
+
+async def test_tutor_self_message_recorded_as_outbound_tutor(db_session):
+    """Cycle 3: if from_user_id == tutor.telegram_user_id, the tutor typed it themselves."""
+    from sqlalchemy import select
+
+    from app.db.models import ChatMessage
+
+    tutor = await _make_connected_tutor(db_session, tg_id=8001, conn_id="conn_self")
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_self",
+        telegram_message_id=300,
+        from_user_id=8001,
+        chat_id=12345,
+        text="спасибо, разберусь сам",
+        now=NOW,
+    )
+    assert result.action == "tutor_outbound"
+    assert result.reply_text is None
+    msg = (
+        await db_session.execute(
+            select(ChatMessage).where(ChatMessage.business_connection_id == "conn_self")
+        )
+    ).scalar_one()
+    assert msg.direction == "outbound_tutor"
+
+
+async def _seed_outbound_at(
+    db_session, *, tutor_id: int, connection_id: str, direction: str, at: datetime
+):
+    """Helper: insert an outbound row with a specific received_at."""
+    msg = await ChatMessageRepository(db_session).record_outbound(
+        tutor_id=tutor_id,
+        business_connection_id=connection_id,
+        text="seeded",
+        direction=direction,
+    )
+    msg.received_at = at
+    await db_session.flush()
+
+
+async def test_inbound_silent_after_recent_tutor_outbound(db_session):
+    """Cycle 3: within 60-min window of tutor typing, bot must stay silent."""
+    tutor = await _make_connected_tutor(db_session, tg_id=8002, conn_id="conn_ho1")
+    await _seed_outbound_at(
+        db_session,
+        tutor_id=tutor.id,
+        connection_id="conn_ho1",
+        direction="outbound_tutor",
+        at=NOW - timedelta(minutes=30),
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_ho1",
+        telegram_message_id=301,
+        from_user_id=55555,
+        chat_id=55555,
+        text="ок, спасибо",
+        now=NOW,
+    )
+    assert result.action == "tutor_handoff"
+    assert result.reply_text is None
+
+
+async def test_inbound_proceeds_after_old_tutor_outbound(db_session):
+    """Cycle 3: past 60-min window, bot resumes normal handling."""
+    tutor = await _make_connected_tutor(db_session, tg_id=8003, conn_id="conn_ho2")
+    await _seed_outbound_at(
+        db_session,
+        tutor_id=tutor.id,
+        connection_id="conn_ho2",
+        direction="outbound_tutor",
+        at=NOW - timedelta(minutes=90),
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_ho2",
+        telegram_message_id=302,
+        from_user_id=66666,
+        chat_id=66666,
+        text="вопрос",
+        now=NOW,
+    )
+    assert result.action == "received"
+
+
+async def test_recent_bot_outbound_does_not_trigger_handoff(db_session):
+    """Cycle 3: only outbound_tutor counts as handoff; bot's own outbound is irrelevant."""
+    tutor = await _make_connected_tutor(db_session, tg_id=8004, conn_id="conn_ho3")
+    await _seed_outbound_at(
+        db_session,
+        tutor_id=tutor.id,
+        connection_id="conn_ho3",
+        direction="outbound_bot",
+        at=NOW - timedelta(minutes=5),
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_ho3",
+        telegram_message_id=303,
+        from_user_id=77777,
+        chat_id=77777,
+        text="ок",
+        now=NOW,
+    )
+    assert result.action == "received"
 
 
 async def test_second_message_from_same_user_reuses_student(db_session):

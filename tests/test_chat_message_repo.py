@@ -93,3 +93,45 @@ async def test_record_outbound_with_intent_and_confidence(db_session):
     )
     assert msg.intent == "reschedule"
     assert msg.confidence == pytest.approx(0.92)
+
+
+async def test_last_tutor_outbound_at_none_when_no_history(db_session):
+    repo = ChatMessageRepository(db_session)
+    assert await repo.last_tutor_outbound_at("conn_empty") is None
+
+
+async def test_last_tutor_outbound_at_ignores_bot_outbound(db_session):
+    """Only direction='outbound_tutor' counts; outbound_bot must be skipped."""
+    tutor = await _make_tutor(db_session, tg_id=1005)
+    repo = ChatMessageRepository(db_session)
+    await repo.record_outbound(
+        tutor_id=tutor.id,
+        business_connection_id="conn_only_bot",
+        text="bot only",
+        direction="outbound_bot",
+    )
+    assert await repo.last_tutor_outbound_at("conn_only_bot") is None
+
+
+async def test_last_tutor_outbound_at_returns_latest(db_session):
+    from datetime import datetime, timedelta, timezone
+
+    tutor = await _make_tutor(db_session, tg_id=1006)
+    repo = ChatMessageRepository(db_session)
+    old = await repo.record_outbound(
+        tutor_id=tutor.id,
+        business_connection_id="conn_two",
+        text="old",
+        direction="outbound_tutor",
+    )
+    newer = await repo.record_outbound(
+        tutor_id=tutor.id,
+        business_connection_id="conn_two",
+        text="new",
+        direction="outbound_tutor",
+    )
+    base = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    old.received_at = base - timedelta(hours=2)
+    newer.received_at = base
+    await db_session.flush()
+    assert await repo.last_tutor_outbound_at("conn_two") == base

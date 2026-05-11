@@ -1,6 +1,8 @@
 """Repository for ChatMessage — inbound/outbound messages with idempotency."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +43,22 @@ class ChatMessageRepository:
         self.session.add(msg)
         await self.session.flush()
         return msg
+
+    async def last_tutor_outbound_at(
+        self, business_connection_id: str
+    ) -> datetime | None:
+        """Latest received_at where direction='outbound_tutor', or None."""
+        stmt = (
+            select(ChatMessage.received_at)
+            .where(
+                ChatMessage.business_connection_id == business_connection_id,
+                ChatMessage.direction == "outbound_tutor",
+            )
+            .order_by(ChatMessage.received_at.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def record_outbound(
         self,
