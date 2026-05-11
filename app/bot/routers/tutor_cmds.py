@@ -12,14 +12,17 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.format import (
+    format_blocks_message,
     format_lessons_message,
     format_students_message,
     format_today_message,
 )
 from app.bot.states import Onboarding
 from app.db.repositories.lesson import LessonRepository
+from app.db.repositories.personal_block import PersonalBlockRepository
 from app.db.repositories.student import StudentRepository
 from app.db.repositories.tutor import TutorRepository
+from app.services.block_parser import parse_block_args
 
 log = logging.getLogger(__name__)
 router = Router(name="tutor_cmds")
@@ -58,9 +61,12 @@ async def cmd_help(message: Message) -> None:
     await message.answer(
         "Доступные команды:\n"
         "/start — начать или возобновить настройку\n"
-        "/today — расписание на сегодня\n"
+        "/today — расписание на сегодня (с личными блоками)\n"
         "/lessons — ближайшие уроки\n"
         "/students — список учеников\n"
+        "/block today 14:00-15:00 обед — личный блок времени\n"
+        "/blocks — все активные блоки\n"
+        "/unblock N — удалить блок по id\n"
         "/help — эта справка\n"
         "/cancel — прервать текущий шаг настройки"
     )
@@ -68,7 +74,7 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("today"))
 async def cmd_today(message: Message, session: AsyncSession) -> None:
-    """Show today's lessons in the tutor's timezone."""
+    """Show today's lessons and personal blocks in the tutor's timezone."""
     if message.from_user is None:
         return
     tutor = await TutorRepository(session).get_by_telegram_user_id(message.from_user.id)
@@ -77,12 +83,98 @@ async def cmd_today(message: Message, session: AsyncSession) -> None:
         return
     tz = ZoneInfo(tutor.timezone)
     today_local = datetime.now(tz).date()
+    from datetime import time, timedelta
+
+    start_local = datetime.combine(today_local, time.min, tzinfo=tz)
+    end_local = start_local + timedelta(days=1)
+
     rows = await LessonRepository(session).list_for_tutor_on_date(
         tutor_id=tutor.id, date_local=today_local, tz_name=tutor.timezone
     )
-    await message.answer(
-        format_today_message(rows, date_local=today_local, tz_name=tutor.timezone)
+    blocks = await PersonalBlockRepository(session).list_for_tutor_in_range(
+        tutor_id=tutor.id, range_start=start_local, range_end=end_local
     )
+    await message.answer(
+        format_today_message(
+            rows, date_local=today_local, tz_name=tutor.timezone, blocks=blocks
+        )
+    )
+
+
+@router.message(Command("block"))
+async def cmd_block(message: Message, session: AsyncSession) -> None:
+    """Add a personal block of time. Usage: /block today 14:00-15:00 label."""
+    if message.from_user is None or message.text is None:
+        return
+    tutor = await TutorRepository(session).get_by_telegram_user_id(message.from_user.id)
+    if tutor is None:
+        await message.answer("Сначала пройди регистрацию: /start")
+        return
+
+    args = message.text.removeprefix("/block").strip()
+    if not args:
+        await message.answer(
+            "Использование:\n"
+            "/block today 14:00-15:00 обед\n"
+            "/block tomorrow 09:00-10:00 встреча\n"
+            "/block 2026-05-20 12:00-13:30 врач\n"
+            "/block 2026-06-20 2026-06-25 каникулы"
+        )
+        return
+
+    tz = ZoneInfo(tutor.timezone)
+    today_local = datetime.now(tz).date()
+    spec = parse_block_args(args, today_local=today_local, tz_name=tutor.timezone)
+    if spec is None:
+        await message.answer(
+            "Не понял формат. Пример: /block today 14:00-15:00 обед"
+        )
+        return
+
+    block = await PersonalBlockRepository(session).create(
+        tutor_id=tutor.id,
+        starts_at=spec.starts_at,
+        ends_at=spec.ends_at,
+        label=spec.label,
+    )
+    await message.answer(f"Блок #{block.id} добавлен: {spec.label or '(без названия)'}")
+
+
+@router.message(Command("blocks"))
+async def cmd_blocks(message: Message, session: AsyncSession) -> None:
+    if message.from_user is None:
+        return
+    tutor = await TutorRepository(session).get_by_telegram_user_id(message.from_user.id)
+    if tutor is None:
+        await message.answer("Сначала пройди регистрацию: /start")
+        return
+    from datetime import timezone as dt_tz
+
+    now = datetime.now(dt_tz.utc)
+    blocks = await PersonalBlockRepository(session).list_upcoming_for_tutor(
+        tutor_id=tutor.id, now=now
+    )
+    await message.answer(format_blocks_message(blocks, tz_name=tutor.timezone))
+
+
+@router.message(Command("unblock"))
+async def cmd_unblock(message: Message, session: AsyncSession) -> None:
+    if message.from_user is None or message.text is None:
+        return
+    tutor = await TutorRepository(session).get_by_telegram_user_id(message.from_user.id)
+    if tutor is None:
+        await message.answer("Сначала пройди регистрацию: /start")
+        return
+    args = message.text.removeprefix("/unblock").strip()
+    try:
+        block_id = int(args)
+    except ValueError:
+        await message.answer("Использование: /unblock 5 (id из /blocks)")
+        return
+    ok = await PersonalBlockRepository(session).delete_by_id(
+        tutor_id=tutor.id, block_id=block_id
+    )
+    await message.answer("Удалён." if ok else "Блок не найден.")
 
 
 @router.message(Command("students"))

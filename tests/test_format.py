@@ -4,11 +4,18 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from app.bot.format import (
+    format_blocks_message,
     format_lessons_message,
     format_students_message,
     format_today_message,
 )
-from app.db.models import Lesson, Student
+from app.db.models import Lesson, PersonalBlock, Student
+
+
+def _block(starts_at: datetime, ends_at: datetime, *, label: str | None = "обед", block_id: int = 1) -> PersonalBlock:
+    b = PersonalBlock(tutor_id=1, starts_at=starts_at, ends_at=ends_at, label=label)
+    b.id = block_id
+    return b
 
 
 def _lesson(scheduled_at: datetime, *, status: str = "scheduled", lesson_id: int = 1) -> Lesson:
@@ -29,9 +36,9 @@ def _student(name: str | None, *, student_id: int = 1) -> Student:
     return s
 
 
-def test_format_today_empty_says_no_lessons():
+def test_format_today_empty_says_nothing():
     msg = format_today_message([], date_local=date(2026, 5, 11), tz_name="Europe/Moscow")
-    assert "уроков нет" in msg
+    assert "пусто" in msg
     assert "2026-05-11" in msg
 
 
@@ -86,3 +93,54 @@ def test_format_lessons_renders_date_and_time():
     assert "13.05" in msg
     assert "10:00" in msg
     assert "Аня" in msg
+
+
+def test_format_today_includes_blocks_below_lessons():
+    when = datetime(2026, 5, 11, 7, 0, tzinfo=timezone.utc)  # 10:00 MSK
+    rows = [(_lesson(when), _student("Петя"))]
+    block_start = datetime(2026, 5, 11, 11, 0, tzinfo=timezone.utc)  # 14:00 MSK
+    block_end = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)  # 15:00 MSK
+    blocks = [_block(block_start, block_end, label="обед")]
+    msg = format_today_message(
+        rows, date_local=date(2026, 5, 11), tz_name="Europe/Moscow", blocks=blocks
+    )
+    assert "10:00" in msg
+    assert "Петя" in msg
+    assert "14:00" in msg
+    assert "обед" in msg
+    assert "🚫" in msg
+
+
+def test_format_today_only_blocks_no_lessons():
+    block_start = datetime(2026, 5, 11, 11, 0, tzinfo=timezone.utc)
+    block_end = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    blocks = [_block(block_start, block_end)]
+    msg = format_today_message(
+        [], date_local=date(2026, 5, 11), tz_name="Europe/Moscow", blocks=blocks
+    )
+    assert "🚫" in msg
+
+
+def test_format_blocks_empty():
+    assert "нет" in format_blocks_message([], tz_name="Europe/Moscow").lower()
+
+
+def test_format_blocks_renders_time_range_same_day():
+    starts = datetime(2026, 5, 11, 11, 0, tzinfo=timezone.utc)  # 14:00 MSK
+    ends = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)  # 15:00 MSK
+    msg = format_blocks_message([_block(starts, ends, block_id=42)], tz_name="Europe/Moscow")
+    assert "#42" in msg
+    assert "11.05 14:00" in msg
+    assert "15:00" in msg
+
+
+def test_format_blocks_multi_day_shows_date_range():
+    # 2026-06-20 00:00 MSK to 2026-06-26 00:00 MSK (June 20-25 inclusive)
+    starts = datetime(2026, 6, 19, 21, 0, tzinfo=timezone.utc)  # 00:00 MSK June 20
+    ends = datetime(2026, 6, 25, 21, 0, tzinfo=timezone.utc)  # 00:00 MSK June 26
+    msg = format_blocks_message(
+        [_block(starts, ends, label="каникулы")], tz_name="Europe/Moscow"
+    )
+    assert "20.06" in msg
+    assert "25.06" in msg
+    assert "каникулы" in msg

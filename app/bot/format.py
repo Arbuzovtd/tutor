@@ -7,14 +7,19 @@ from __future__ import annotations
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from app.db.models import Lesson, Student
+from app.db.models import Lesson, PersonalBlock, Student
 
 
 def format_today_message(
-    rows: list[tuple[Lesson, Student]], *, date_local: date, tz_name: str
+    rows: list[tuple[Lesson, Student]],
+    *,
+    date_local: date,
+    tz_name: str,
+    blocks: list[PersonalBlock] | None = None,
 ) -> str:
-    if not rows:
-        return f"Сегодня ({date_local.isoformat()}) уроков нет."
+    blocks = blocks or []
+    if not rows and not blocks:
+        return f"Сегодня ({date_local.isoformat()}) пусто."
     tz = ZoneInfo(tz_name)
     lines = [f"Сегодня ({date_local.isoformat()}):"]
     for lesson, student in rows:
@@ -22,6 +27,32 @@ def format_today_message(
         name = student.name or f"ученик #{student.id}"
         suffix = "" if lesson.status == "scheduled" else f" [{lesson.status}]"
         lines.append(f"• {local_time} — {name}{suffix}")
+    for block in blocks:
+        start = block.starts_at.astimezone(tz).strftime("%H:%M")
+        end = block.ends_at.astimezone(tz).strftime("%H:%M")
+        label = block.label or "блок"
+        lines.append(f"🚫 {start}-{end} — {label}")
+    return "\n".join(lines)
+
+
+def format_blocks_message(blocks: list[PersonalBlock], *, tz_name: str) -> str:
+    if not blocks:
+        return "Личных блоков нет."
+    tz = ZoneInfo(tz_name)
+    lines = [f"Личные блоки ({len(blocks)}):"]
+    for b in blocks:
+        start = b.starts_at.astimezone(tz)
+        end = b.ends_at.astimezone(tz)
+        if start.date() == end.date() or (end - start).total_seconds() <= 24 * 3600:
+            when = f"{start.strftime('%d.%m %H:%M')}–{end.strftime('%H:%M')}"
+        else:
+            # multi-day all-day block: end is exclusive (next day 00:00)
+            from datetime import timedelta
+
+            inclusive_end = end - timedelta(seconds=1)
+            when = f"{start.strftime('%d.%m')}–{inclusive_end.strftime('%d.%m')}"
+        label = b.label or "блок"
+        lines.append(f"#{b.id} • {when} — {label}")
     return "\n".join(lines)
 
 
