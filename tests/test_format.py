@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from app.bot.format import format_today_message
+from app.bot.format import (
+    format_lessons_message,
+    format_students_message,
+    format_today_message,
+)
 from app.db.models import Lesson, Student
 
 
@@ -52,3 +56,33 @@ def test_format_today_falls_back_to_student_id_when_no_name():
     rows = [(_lesson(when), _student(name=None, student_id=42))]
     msg = format_today_message(rows, date_local=date(2026, 5, 11), tz_name="Europe/Moscow")
     assert "#42" in msg
+
+
+def test_format_students_empty():
+    msg = format_students_message([])
+    assert "пока нет" in msg.lower() or "нет" in msg.lower()
+
+
+def test_format_students_lists_with_subject_and_grade():
+    s = _student("Петя")
+    s.subject = "математика"
+    s.grade = "9"
+    msg = format_students_message([s])
+    assert "Петя" in msg
+    assert "математика" in msg
+    assert "9" in msg
+
+
+def test_format_lessons_empty():
+    msg = format_lessons_message([], tz_name="Europe/Moscow")
+    assert "нет" in msg.lower()
+
+
+def test_format_lessons_renders_date_and_time():
+    # 07:00 UTC May 13 = 10:00 MSK May 13
+    when = datetime(2026, 5, 13, 7, 0, tzinfo=timezone.utc)
+    rows = [(_lesson(when), _student("Аня"))]
+    msg = format_lessons_message(rows, tz_name="Europe/Moscow")
+    assert "13.05" in msg
+    assert "10:00" in msg
+    assert "Аня" in msg

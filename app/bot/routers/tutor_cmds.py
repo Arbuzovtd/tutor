@@ -11,9 +11,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.format import format_today_message
+from app.bot.format import (
+    format_lessons_message,
+    format_students_message,
+    format_today_message,
+)
 from app.bot.states import Onboarding
 from app.db.repositories.lesson import LessonRepository
+from app.db.repositories.student import StudentRepository
 from app.db.repositories.tutor import TutorRepository
 
 log = logging.getLogger(__name__)
@@ -54,6 +59,8 @@ async def cmd_help(message: Message) -> None:
         "Доступные команды:\n"
         "/start — начать или возобновить настройку\n"
         "/today — расписание на сегодня\n"
+        "/lessons — ближайшие уроки\n"
+        "/students — список учеников\n"
         "/help — эта справка\n"
         "/cancel — прервать текущий шаг настройки"
     )
@@ -76,6 +83,37 @@ async def cmd_today(message: Message, session: AsyncSession) -> None:
     await message.answer(
         format_today_message(rows, date_local=today_local, tz_name=tutor.timezone)
     )
+
+
+@router.message(Command("students"))
+async def cmd_students(message: Message, session: AsyncSession) -> None:
+    """Show all students for the tutor."""
+    if message.from_user is None:
+        return
+    tutor = await TutorRepository(session).get_by_telegram_user_id(message.from_user.id)
+    if tutor is None:
+        await message.answer("Сначала пройди регистрацию: /start")
+        return
+    students = await StudentRepository(session).list_for_tutor(tutor.id)
+    await message.answer(format_students_message(students))
+
+
+@router.message(Command("lessons"))
+async def cmd_lessons(message: Message, session: AsyncSession) -> None:
+    """Show upcoming lessons in the tutor's timezone."""
+    if message.from_user is None:
+        return
+    tutor = await TutorRepository(session).get_by_telegram_user_id(message.from_user.id)
+    if tutor is None:
+        await message.answer("Сначала пройди регистрацию: /start")
+        return
+    from datetime import timezone as dt_timezone
+
+    now = datetime.now(dt_timezone.utc)
+    rows = await LessonRepository(session).list_upcoming_for_tutor(
+        tutor_id=tutor.id, now=now
+    )
+    await message.answer(format_lessons_message(rows, tz_name=tutor.timezone))
 
 
 @router.message(Command("cancel"))

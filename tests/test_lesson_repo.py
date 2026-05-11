@@ -147,6 +147,49 @@ async def test_list_for_tutor_on_date_isolates_per_tutor(db_session):
     assert student.id == student_a.id
 
 
+async def test_list_upcoming_for_tutor_excludes_past_and_sorts(db_session):
+    tutor, student = await _make_tutor_and_student(
+        db_session, tg_tutor=4401, tg_student=4402
+    )
+    repo = LessonRepository(db_session)
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    past = await repo.create(
+        tutor_id=tutor.id,
+        student_id=student.id,
+        scheduled_at=now - timedelta(hours=1),
+    )
+    future_far = await repo.create(
+        tutor_id=tutor.id,
+        student_id=student.id,
+        scheduled_at=now + timedelta(days=3),
+    )
+    future_near = await repo.create(
+        tutor_id=tutor.id,
+        student_id=student.id,
+        scheduled_at=now + timedelta(hours=2),
+    )
+    rows = await repo.list_upcoming_for_tutor(tutor_id=tutor.id, now=now)
+    ids = [lesson.id for lesson, _ in rows]
+    assert past.id not in ids
+    assert ids == [future_near.id, future_far.id]
+
+
+async def test_list_upcoming_for_tutor_respects_limit(db_session):
+    tutor, student = await _make_tutor_and_student(
+        db_session, tg_tutor=4501, tg_student=4502
+    )
+    repo = LessonRepository(db_session)
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    for hours in range(1, 6):
+        await repo.create(
+            tutor_id=tutor.id,
+            student_id=student.id,
+            scheduled_at=now + timedelta(hours=hours),
+        )
+    rows = await repo.list_upcoming_for_tutor(tutor_id=tutor.id, now=now, limit=3)
+    assert len(rows) == 3
+
+
 async def test_list_for_tutor_on_date_empty(db_session):
     from datetime import date
 

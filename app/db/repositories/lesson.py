@@ -76,6 +76,20 @@ class LessonRepository:
         result = await self.session.execute(stmt)
         return [(lesson, student) for lesson, student in result.all()]
 
+    async def list_upcoming_for_tutor(
+        self, *, tutor_id: int, now: datetime, limit: int = 50
+    ) -> list[tuple[Lesson, Student]]:
+        """All future lessons for this tutor, joined with their student rows."""
+        stmt = (
+            select(Lesson, Student)
+            .join(Student, Lesson.student_id == Student.id)
+            .where(Lesson.tutor_id == tutor_id, Lesson.scheduled_at > now)
+            .order_by(Lesson.scheduled_at.asc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return [(lesson, student) for lesson, student in result.all()]
+
     async def update_status(self, lesson_id: int, status: str) -> Lesson | None:
         lesson = await self.session.get(Lesson, lesson_id)
         if lesson is None:

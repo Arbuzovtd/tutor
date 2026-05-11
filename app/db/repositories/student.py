@@ -11,6 +11,16 @@ class StudentRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def list_for_tutor(self, tutor_id: int) -> list[Student]:
+        """All students for a tutor, sorted by name (alphabetical, then by id for ties)."""
+        stmt = (
+            select(Student)
+            .where(Student.tutor_id == tutor_id)
+            .order_by(Student.name.asc().nulls_last(), Student.id.asc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_or_create_by_telegram_id(
         self,
         *,
