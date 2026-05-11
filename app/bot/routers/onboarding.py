@@ -89,7 +89,7 @@ async def onb_price(
             payload_json=profile,
         )
     )
-    log.info("Onboarding completed for tutor_id=%s: %s", tutor.id, profile)
+    log.info("Onboarding completed for tutor_id=%s", tutor.id)
 
     await message.answer(
         "Записал.\n\n"

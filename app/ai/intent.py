@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.ai.prefilter import is_scheduling_message
-from app.ai.prompts import INTENT_SYSTEM_PROMPT, INTENT_USER_TEMPLATE
+from app.ai.prompts import INTENT_SYSTEM_PROMPT, INTENT_USER_TEMPLATE, sanitize_student_text
 from app.ai.types import IntentKind, IntentResult
 
 log = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class IntentParser:
 
         user = INTENT_USER_TEMPLATE.format(
             current_datetime=current_datetime.isoformat(),
-            message=text,
+            message=sanitize_student_text(text),
         )
         try:
             content = await self.completer.complete_json(INTENT_SYSTEM_PROMPT, user)

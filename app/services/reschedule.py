@@ -26,6 +26,9 @@ from app.db.repositories.student import StudentRepository
 HANDOFF_WINDOW = timedelta(minutes=60)
 # Below this, intents are queued for tutor review instead of auto-replied.
 INTENT_CONFIDENCE_THRESHOLD = 0.7
+# Telegram allows up to 4096 chars; we clip a bit short to leave headroom for
+# DB column (VARCHAR 4000), audit log payloads, and ping rendering.
+MAX_TEXT_LEN = 3500
 
 # Acks sent to the student while we wait for the tutor's confirmation.
 _RESCHEDULE_ACK = "Сейчас уточню расписание и вернусь через пару минут."
@@ -92,6 +95,11 @@ async def handle_business_message(
     now: datetime,
     parser: IntentParserProtocol | None = None,
 ) -> HandleResult:
+    # Defensive cap so a crafted 4096-char message can't blow VARCHAR(4000) or
+    # produce a 4000-char tutor ping.
+    if len(text) > MAX_TEXT_LEN:
+        text = text[:MAX_TEXT_LEN] + "…"
+
     bc_repo = BusinessConnectionRepository(session)
     bc = await bc_repo.get_by_connection_id(connection_id)
     if bc is None:

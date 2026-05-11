@@ -26,4 +26,10 @@ def build_intent_parser(settings: Settings | None = None) -> IntentParser | None
         api_key=settings.openai_api_key.get_secret_value(),
         base_url=settings.openai_base_url,
     )
-    return IntentParser(OpenAICompleter(client=client, model=settings.openai_model))
+    return IntentParser(
+        OpenAICompleter(
+            client=client,
+            model=settings.openai_model,
+            max_tokens=settings.openai_max_tokens,
+        )
+    )

@@ -97,8 +97,8 @@ async def cmd_summary(message: Message, session: AsyncSession) -> None:
     blocks = await PersonalBlockRepository(session).list_for_tutor_in_range(
         tutor_id=tutor.id, range_start=start_local, range_end=end_local
     )
-    pending = await AuditLogRepository(session).count_for_tutor_by_action(
-        tutor_id=tutor.id, action="pending_review"
+    pending = await AuditLogRepository(session).count_pending_review_unresolved(
+        tutor_id=tutor.id
     )
     await message.answer(
         build_morning_summary(

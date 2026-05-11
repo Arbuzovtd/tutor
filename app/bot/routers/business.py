@@ -65,14 +65,18 @@ async def on_business_message(
     parser: IntentParserProtocol | None = None,
 ) -> None:
     """Hand off to the reschedule engine; only send a reply if engine produced one."""
-    if message.business_connection_id is None or message.text is None:
+    if (
+        message.business_connection_id is None
+        or message.text is None
+        or message.from_user is None
+    ):
         return
 
     result = await handle_business_message(
         session=session,
         connection_id=message.business_connection_id,
         telegram_message_id=message.message_id,
-        from_user_id=message.from_user.id if message.from_user else 0,
+        from_user_id=message.from_user.id,
         chat_id=message.chat.id,
         text=message.text,
         now=datetime.now(timezone.utc),

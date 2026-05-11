@@ -44,3 +44,17 @@ def test_build_intent_parser_uses_default_base_url_when_unset():
     parser = build_intent_parser(_settings(openai_key="sk-fake"))
     assert isinstance(parser, IntentParser)
     assert "openai.com" in str(parser.completer.client.base_url)
+
+
+def test_http_base_url_rejected_by_settings():
+    import pytest
+
+    with pytest.raises(Exception):
+        _settings(openai_key="sk-fake", openai_base_url="http://insecure.example.com/v1")
+
+
+def test_max_tokens_propagated_to_completer():
+    parser = build_intent_parser(_settings(openai_key="sk-fake"))
+    assert parser is not None
+    # Default settings.openai_max_tokens == 300
+    assert parser.completer.max_tokens == 300

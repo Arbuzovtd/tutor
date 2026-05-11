@@ -58,8 +58,8 @@ async def _send_summary_for_tutor(bot: "Bot", session, tutor: Tutor) -> None:
     blocks = await PersonalBlockRepository(session).list_for_tutor_in_range(
         tutor_id=tutor.id, range_start=start_local, range_end=end_local
     )
-    pending = await AuditLogRepository(session).count_for_tutor_by_action(
-        tutor_id=tutor.id, action="pending_review"
+    pending = await AuditLogRepository(session).count_pending_review_unresolved(
+        tutor_id=tutor.id
     )
     text = build_morning_summary(
         today_local=today_local,
@@ -68,44 +68,60 @@ async def _send_summary_for_tutor(bot: "Bot", session, tutor: Tutor) -> None:
         blocks=blocks,
         pending_review_count=pending,
     )
-    try:
-        await bot.send_message(chat_id=tutor.telegram_user_id, text=text)
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "morning summary send failed tutor_id=%s tg=%s: %s",
-            tutor.id,
-            tutor.telegram_user_id,
-            exc,
-        )
-        return
 
+    # Claim the slot in the audit log BEFORE the Telegram send so a concurrent
+    # tick (e.g., from a process restart in the same minute) is blocked by the
+    # commit. Cost: if send_message fails after this point, we won't retry today
+    # — that's the right trade-off (avoid duplicate spam).
     await AuditLogRepository(session).log(
         tutor_id=tutor.id,
         action="morning_summary_sent",
         payload={"date": today_local.isoformat()},
     )
+    await session.commit()
+
+    try:
+        await bot.send_message(chat_id=tutor.telegram_user_id, text=text)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "morning summary send failed tutor_id=%s tg=%s: %s (audit row already claimed)",
+            tutor.id,
+            tutor.telegram_user_id,
+            exc,
+        )
 
 
 async def morning_summary_tick(bot: "Bot") -> None:
-    """One scheduler tick: send summary to each tutor whose local time is 9:00."""
-    async with AsyncSessionLocal() as session:
-        stmt = select(Tutor).where(Tutor.is_active.is_(True), Tutor.is_registered.is_(True))
-        tutors = (await session.execute(stmt)).scalars().all()
+    """One scheduler tick: send summary to each tutor whose local time is 9:00.
 
-        for tutor in tutors:
+    Uses a fresh session per tutor so a partial failure can't poison other
+    tutors' work in the same iteration.
+    """
+    async with AsyncSessionLocal() as scan_session:
+        stmt = select(Tutor).where(Tutor.is_active.is_(True), Tutor.is_registered.is_(True))
+        tutors = list((await scan_session.execute(stmt)).scalars().all())
+
+    for tutor in tutors:
+        try:
+            tz = ZoneInfo(tutor.timezone)
+        except Exception:  # noqa: BLE001
+            log.warning(
+                "invalid timezone for tutor_id=%s: %r — skipping",
+                tutor.id,
+                tutor.timezone,
+            )
+            continue
+        now_local = datetime.now(tz)
+        if not (now_local.hour == DELIVERY_HOUR and now_local.minute == DELIVERY_MINUTE):
+            continue
+
+        async with AsyncSessionLocal() as session:
             try:
-                tz = ZoneInfo(tutor.timezone)
-            except Exception:  # noqa: BLE001
-                continue
-            now_local = datetime.now(tz)
-            if not (
-                now_local.hour == DELIVERY_HOUR
-                and now_local.minute == DELIVERY_MINUTE
-            ):
-                continue
-            try:
-                await _send_summary_for_tutor(bot, session, tutor)
-                await session.commit()
+                # Re-fetch tutor inside this session so identity tracking works.
+                fresh = await session.get(Tutor, tutor.id)
+                if fresh is None:
+                    continue
+                await _send_summary_for_tutor(bot, session, fresh)
             except Exception as exc:  # noqa: BLE001
                 await session.rollback()
                 log.exception("morning summary failed for tutor_id=%s: %s", tutor.id, exc)

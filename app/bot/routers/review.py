@@ -16,11 +16,17 @@ import logging
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import ChatMessage
+from app.db.models import ChatMessage, Student
 from app.db.repositories.audit_log import AuditLogRepository
 from app.db.repositories.chat_message import ChatMessageRepository
+from app.db.repositories.tutor import TutorRepository
+
+# Hard upper bound on chat_message_id from callback_data — guards against
+# nonsensical input that would otherwise trigger pointless DB lookups.
+_MAX_REASONABLE_PK = 2**31
 
 log = logging.getLogger(__name__)
 router = Router(name="review")
@@ -53,7 +59,9 @@ async def _resolve(
     action: str,
     reply_text: str,
 ) -> None:
-    """Shared logic for approve/reject. Loads inbound message, replies in business chat."""
+    """Shared logic for approve/reject. Verifies the clicker is the owning tutor,
+    then sends the chosen reply to the student via the business connection.
+    """
     if query.data is None or ":" not in query.data:
         await query.answer("Некорректные данные.")
         return
@@ -62,13 +70,64 @@ async def _resolve(
     except ValueError:
         await query.answer("Некорректный идентификатор.")
         return
+    if not (0 < chat_message_id < _MAX_REASONABLE_PK):
+        await query.answer("Некорректный идентификатор.")
+        return
+    if query.from_user is None:
+        await query.answer("Кто вы?")
+        return
+
+    # Auth: the clicker must be the registered tutor who owns this inbound row.
+    clicker = await TutorRepository(session).get_by_telegram_user_id(query.from_user.id)
+    if clicker is None or not clicker.is_registered or not clicker.is_active:
+        # Only audit when we have a tutor row to attach to (FK constraint).
+        if clicker is not None:
+            await AuditLogRepository(session).log(
+                tutor_id=clicker.id,
+                action="unauthorized_review_attempt",
+                payload={
+                    "clicker_tg_id": query.from_user.id,
+                    "chat_message_id": chat_message_id,
+                    "reason": "not_registered_or_inactive",
+                },
+            )
+        else:
+            log.warning(
+                "review callback from unknown tg_id=%s for chat_message_id=%s",
+                query.from_user.id,
+                chat_message_id,
+            )
+        await query.answer("Нет доступа.")
+        return
 
     inbound = await session.get(ChatMessage, chat_message_id)
     if inbound is None or inbound.direction != "inbound":
         await query.answer("Сообщение не найдено или уже обработано.")
         return
+    if inbound.tutor_id != clicker.id:
+        await AuditLogRepository(session).log(
+            tutor_id=clicker.id,
+            action="unauthorized_review_attempt",
+            payload={
+                "clicker_tg_id": query.from_user.id,
+                "chat_message_id": chat_message_id,
+                "actual_owner_tutor_id": inbound.tutor_id,
+                "reason": "cross_tenant",
+            },
+        )
+        await query.answer("Это не ваша задача.")
+        return
     if inbound.business_connection_id is None or inbound.student_id is None:
         await query.answer("Недостаточно данных для ответа.")
+        return
+
+    # Defence-in-depth: only fetch the student scoped to the owning tutor.
+    student_stmt = select(Student).where(
+        Student.id == inbound.student_id, Student.tutor_id == clicker.id
+    )
+    student = (await session.execute(student_stmt)).scalar_one_or_none()
+    if student is None:
+        await query.answer("Ученик не найден.")
         return
 
     msg_repo = ChatMessageRepository(session)
@@ -86,18 +145,12 @@ async def _resolve(
         payload={"chat_message_id": chat_message_id},
     )
 
-    if query.bot is not None and inbound.business_connection_id is not None:
-        # Find the original chat by replaying the student's user_chat_id via BC
-        # Simpler: send to a saved student.telegram_chat_id
-        from app.db.models import Student
-
-        student = await session.get(Student, inbound.student_id)
-        if student is not None:
-            await query.bot.send_message(
-                chat_id=student.telegram_chat_id,
-                business_connection_id=inbound.business_connection_id,
-                text=reply_text,
-            )
+    if query.bot is not None:
+        await query.bot.send_message(
+            chat_id=student.telegram_chat_id,
+            business_connection_id=inbound.business_connection_id,
+            text=reply_text,
+        )
 
     # Edit the tutor's ping to show resolution
     if query.message is not None:

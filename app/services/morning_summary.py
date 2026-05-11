@@ -49,7 +49,7 @@ def build_morning_summary(
     if pending_review_count > 0:
         word = "сообщение" if pending_review_count == 1 else "сообщений"
         sections.append(
-            f"\n💬 Требует решения: {pending_review_count} {word}. См. /pending."
+            f"\n💬 Требует твоего решения: {pending_review_count} {word}."
         )
 
     return "\n".join(sections)

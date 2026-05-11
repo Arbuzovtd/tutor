@@ -34,6 +34,33 @@ class AuditLogRepository:
         result = await self.session.execute(stmt)
         return int(result.scalar_one())
 
+    async def count_pending_review_unresolved(self, *, tutor_id: int) -> int:
+        """Count 'pending_review' audit rows whose chat_message_id has no later
+        'approved' or 'rejected' row. This is the live backlog the tutor still
+        needs to act on.
+        """
+        from sqlalchemy import and_, func, not_, or_
+
+        pending = AuditLog.__table__.alias("pending")
+        resolution = AuditLog.__table__.alias("res")
+
+        # Subquery: chat_message_ids that have been resolved for this tutor.
+        resolved_msg_ids = (
+            select(resolution.c.payload_json["chat_message_id"].astext)
+            .where(
+                resolution.c.tutor_id == tutor_id,
+                resolution.c.action.in_(("approved", "rejected")),
+            )
+        ).scalar_subquery()
+
+        stmt = select(func.count(pending.c.id)).where(
+            pending.c.tutor_id == tutor_id,
+            pending.c.action == "pending_review",
+            not_(pending.c.payload_json["chat_message_id"].astext.in_(resolved_msg_ids)),
+        )
+        result = await self.session.execute(stmt)
+        return int(result.scalar_one())
+
     async def list_for_tutor(
         self, tutor_id: int, limit: int = 50
     ) -> list[AuditLog]:

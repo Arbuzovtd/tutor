@@ -10,6 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.deps import build_intent_parser
 from app.bot.middlewares.db import DbSessionMiddleware
+from app.bot.middlewares.rate_limit import RateLimitMiddleware
 from app.bot.routers import business as business_router
 from app.bot.routers import onboarding as onboarding_router
 from app.bot.routers import review as review_router
@@ -44,6 +45,9 @@ def make_dispatcher() -> Dispatcher:
     # None when OPENAI_API_KEY missing — engine then logs without auto-replying.
     parser = build_intent_parser()
     dp = Dispatcher(storage=MemoryStorage(), parser=parser)
+
+    # Rate limit BEFORE db session — reject floods without opening a transaction.
+    dp.update.outer_middleware(RateLimitMiddleware())
 
     # Inject AsyncSession into every handler that asks for `session: AsyncSession`.
     # Cover both regular updates and business updates — Telegram delivers them
