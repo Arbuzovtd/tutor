@@ -21,3 +21,8 @@ client_secret*.json
 
 # OS
 .DS_Store
+
+# Test artifacts
+.coverage
+.pytest_cache/
+htmlcov/
