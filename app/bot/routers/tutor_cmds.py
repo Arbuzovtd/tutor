@@ -18,11 +18,13 @@ from app.bot.format import (
     format_today_message,
 )
 from app.bot.states import Onboarding
+from app.db.repositories.audit_log import AuditLogRepository
 from app.db.repositories.lesson import LessonRepository
 from app.db.repositories.personal_block import PersonalBlockRepository
 from app.db.repositories.student import StudentRepository
 from app.db.repositories.tutor import TutorRepository
 from app.services.block_parser import parse_block_args
+from app.services.morning_summary import build_morning_summary
 
 log = logging.getLogger(__name__)
 router = Router(name="tutor_cmds")
@@ -61,6 +63,7 @@ async def cmd_help(message: Message) -> None:
     await message.answer(
         "Доступные команды:\n"
         "/start — начать или возобновить настройку\n"
+        "/summary — утренняя сводка (вручную)\n"
         "/today — расписание на сегодня (с личными блоками)\n"
         "/lessons — ближайшие уроки\n"
         "/students — список учеников\n"
@@ -69,6 +72,42 @@ async def cmd_help(message: Message) -> None:
         "/unblock N — удалить блок по id\n"
         "/help — эта справка\n"
         "/cancel — прервать текущий шаг настройки"
+    )
+
+
+@router.message(Command("summary"))
+async def cmd_summary(message: Message, session: AsyncSession) -> None:
+    """Build today's morning summary on demand."""
+    if message.from_user is None:
+        return
+    tutor = await TutorRepository(session).get_by_telegram_user_id(message.from_user.id)
+    if tutor is None:
+        await message.answer("Сначала пройди регистрацию: /start")
+        return
+    from datetime import time, timedelta
+
+    tz = ZoneInfo(tutor.timezone)
+    today_local = datetime.now(tz).date()
+    start_local = datetime.combine(today_local, time.min, tzinfo=tz)
+    end_local = start_local + timedelta(days=1)
+
+    lessons = await LessonRepository(session).list_for_tutor_on_date(
+        tutor_id=tutor.id, date_local=today_local, tz_name=tutor.timezone
+    )
+    blocks = await PersonalBlockRepository(session).list_for_tutor_in_range(
+        tutor_id=tutor.id, range_start=start_local, range_end=end_local
+    )
+    pending = await AuditLogRepository(session).count_for_tutor_by_action(
+        tutor_id=tutor.id, action="pending_review"
+    )
+    await message.answer(
+        build_morning_summary(
+            today_local=today_local,
+            tz_name=tutor.timezone,
+            lessons=lessons,
+            blocks=blocks,
+            pending_review_count=pending,
+        )
     )
 
 

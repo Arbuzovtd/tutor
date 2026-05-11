@@ -47,6 +47,24 @@ async def test_list_for_tutor_respects_limit(db_session):
     assert len(entries) == 2
 
 
+async def test_count_for_tutor_by_action(db_session):
+    tutor = await _make_tutor(db_session, tg_id=4201)
+    repo = AuditLogRepository(db_session)
+    await repo.log(tutor_id=tutor.id, action="pending_review")
+    await repo.log(tutor_id=tutor.id, action="pending_review")
+    await repo.log(tutor_id=tutor.id, action="approved")
+    pending = await repo.count_for_tutor_by_action(
+        tutor_id=tutor.id, action="pending_review"
+    )
+    approved = await repo.count_for_tutor_by_action(
+        tutor_id=tutor.id, action="approved"
+    )
+    none = await repo.count_for_tutor_by_action(tutor_id=tutor.id, action="missing")
+    assert pending == 2
+    assert approved == 1
+    assert none == 0
+
+
 async def test_list_for_tutor_isolates_by_tutor(db_session):
     a = await _make_tutor(db_session, tg_id=4101)
     b = await _make_tutor(db_session, tg_id=4102)

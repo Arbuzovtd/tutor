@@ -25,6 +25,15 @@ class AuditLogRepository:
         await self.session.flush()
         return entry
 
+    async def count_for_tutor_by_action(self, *, tutor_id: int, action: str) -> int:
+        from sqlalchemy import func
+
+        stmt = select(func.count(AuditLog.id)).where(
+            AuditLog.tutor_id == tutor_id, AuditLog.action == action
+        )
+        result = await self.session.execute(stmt)
+        return int(result.scalar_one())
+
     async def list_for_tutor(
         self, tutor_id: int, limit: int = 50
     ) -> list[AuditLog]:

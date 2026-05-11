@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.28.2",
     "alembic>=1.18.4",
+    "apscheduler>=3.11.2",
     "asyncpg>=0.31.0",
     "cryptography>=48.0.0",
     "fastapi>=0.136.1",

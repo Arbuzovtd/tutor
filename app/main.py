@@ -15,6 +15,7 @@ from sqlalchemy import text
 from app.bot.dispatcher import ALLOWED_UPDATES, make_bot, make_dispatcher
 from app.config import get_settings
 from app.db.session import engine
+from app.services.scheduler import make_scheduler
 
 logging.basicConfig(
     level=getattr(logging, get_settings().log_level),
@@ -35,10 +36,15 @@ async def lifespan(_: FastAPI):
         name="bot-polling",
     )
 
+    scheduler = make_scheduler(bot)
+    scheduler.start()
+    log.info("Morning summary scheduler started (cron */1 min UTC, fires at 09:00 local per tutor)")
+
     try:
         yield
     finally:
-        log.info("Stopping bot polling")
+        log.info("Stopping bot polling and scheduler")
+        scheduler.shutdown(wait=False)
         await dp.stop_polling()
         polling_task.cancel()
         try:
