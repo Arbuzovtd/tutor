@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Tutor
 from app.db.repositories.business_connection import BusinessConnectionRepository
 from app.db.repositories.chat_message import ChatMessageRepository
+from app.db.repositories.student import StudentRepository
 
 
 @dataclass(frozen=True)
@@ -53,10 +54,16 @@ async def handle_business_message(
     if await msg_repo.exists_by_telegram_msg(connection_id, telegram_message_id):
         return HandleResult(action="duplicate_ignored")
 
+    student, _ = await StudentRepository(session).get_or_create_by_telegram_id(
+        tutor_id=tutor.id,
+        telegram_user_id=from_user_id,
+        telegram_chat_id=chat_id,
+    )
     await msg_repo.record_inbound(
         tutor_id=tutor.id,
         business_connection_id=connection_id,
         telegram_message_id=telegram_message_id,
         text=text,
+        student_id=student.id,
     )
     return HandleResult(action="received")

@@ -114,3 +114,64 @@ async def test_first_message_persists_inbound_record(db_session):
         await ChatMessageRepository(db_session).exists_by_telegram_msg("conn_fresh", 88)
         is True
     )
+
+
+async def test_first_message_creates_student_and_links_chat_message(db_session):
+    """Cycle 2: fresh from_user_id materializes a Student, ChatMessage.student_id links it."""
+    from sqlalchemy import select
+
+    from app.db.models import ChatMessage, Student
+
+    tutor = await _make_connected_tutor(db_session, tg_id=7004, conn_id="conn_stu")
+    await handle_business_message(
+        session=db_session,
+        connection_id="conn_stu",
+        telegram_message_id=100,
+        from_user_id=33333,
+        chat_id=33333,
+        text="hello",
+        now=NOW,
+    )
+    student = (
+        await db_session.execute(
+            select(Student).where(Student.telegram_user_id == 33333)
+        )
+    ).scalar_one()
+    assert student.tutor_id == tutor.id
+
+    chat_msg = (
+        await db_session.execute(
+            select(ChatMessage).where(
+                ChatMessage.business_connection_id == "conn_stu",
+                ChatMessage.telegram_message_id == 100,
+            )
+        )
+    ).scalar_one()
+    assert chat_msg.student_id == student.id
+
+
+async def test_second_message_from_same_user_reuses_student(db_session):
+    """Cycle 2: don't duplicate Student for the same (tutor_id, telegram_user_id)."""
+    from sqlalchemy import func, select
+
+    from app.db.models import Student
+
+    tutor = await _make_connected_tutor(db_session, tg_id=7005, conn_id="conn_stu2")
+    for msg_id in (200, 201):
+        await handle_business_message(
+            session=db_session,
+            connection_id="conn_stu2",
+            telegram_message_id=msg_id,
+            from_user_id=44444,
+            chat_id=44444,
+            text=f"msg{msg_id}",
+            now=NOW,
+        )
+    count = (
+        await db_session.execute(
+            select(func.count(Student.id)).where(
+                Student.tutor_id == tutor.id, Student.telegram_user_id == 44444
+            )
+        )
+    ).scalar_one()
+    assert count == 1
