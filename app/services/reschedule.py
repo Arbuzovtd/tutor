@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.types import IntentKind, IntentResult
 from app.db.models import Tutor
 from app.db.repositories.business_connection import BusinessConnectionRepository
 from app.db.repositories.chat_message import ChatMessageRepository
@@ -21,6 +23,16 @@ from app.db.repositories.student import StudentRepository
 
 # Window during which a tutor's manual reply silences the bot in this chat.
 HANDOFF_WINDOW = timedelta(minutes=60)
+# Below this, intents are queued for tutor review instead of auto-replied.
+INTENT_CONFIDENCE_THRESHOLD = 0.7
+
+# Stub replies for cycle 4 — replaced with calendar-aware text in cycle 5.
+_STUB_RESCHEDULE_REPLY = "Понял, сейчас уточню расписание и вернусь через минуту."
+_STUB_CANCEL_REPLY = "Принял, проверю отмену и подтвержу."
+
+
+class IntentParserProtocol(Protocol):
+    async def parse(self, text: str, current_datetime: datetime) -> IntentResult: ...
 
 
 @dataclass(frozen=True)
@@ -43,6 +55,7 @@ async def handle_business_message(
     chat_id: int,
     text: str,
     now: datetime,
+    parser: IntentParserProtocol | None = None,
 ) -> HandleResult:
     bc_repo = BusinessConnectionRepository(session)
     bc = await bc_repo.get_by_connection_id(connection_id)
@@ -86,4 +99,34 @@ async def handle_business_message(
     if last_tutor_at is not None and now - last_tutor_at < HANDOFF_WINDOW:
         return HandleResult(action="tutor_handoff")
 
-    return HandleResult(action="received")
+    if parser is None:
+        return HandleResult(action="received")
+
+    intent = await parser.parse(text, current_datetime=now)
+    high_conf = intent.confidence >= INTENT_CONFIDENCE_THRESHOLD
+
+    if high_conf and intent.kind == IntentKind.RESCHEDULE:
+        await msg_repo.record_outbound(
+            tutor_id=tutor.id,
+            business_connection_id=connection_id,
+            text=_STUB_RESCHEDULE_REPLY,
+            direction="outbound_bot",
+            student_id=student.id,
+            intent=intent.kind.value,
+            confidence=intent.confidence,
+        )
+        return HandleResult(action="reschedule_pending", reply_text=_STUB_RESCHEDULE_REPLY)
+
+    if high_conf and intent.kind == IntentKind.CANCEL:
+        await msg_repo.record_outbound(
+            tutor_id=tutor.id,
+            business_connection_id=connection_id,
+            text=_STUB_CANCEL_REPLY,
+            direction="outbound_bot",
+            student_id=student.id,
+            intent=intent.kind.value,
+            confidence=intent.confidence,
+        )
+        return HandleResult(action="cancel_pending", reply_text=_STUB_CANCEL_REPLY)
+
+    return HandleResult(action="needs_tutor_review")

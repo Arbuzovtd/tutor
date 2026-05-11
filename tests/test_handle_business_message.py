@@ -8,10 +8,19 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from app.ai.types import IntentKind, IntentResult
 from app.db.repositories.business_connection import BusinessConnectionRepository
 from app.db.repositories.chat_message import ChatMessageRepository
 from app.db.repositories.tutor import TutorRepository
 from app.services.reschedule import HandleResult, handle_business_message
+
+
+class _StubParser:
+    def __init__(self, result: IntentResult) -> None:
+        self._result = result
+
+    async def parse(self, text: str, current_datetime) -> IntentResult:  # noqa: ARG002
+        return self._result
 
 
 NOW = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
@@ -255,6 +264,127 @@ async def test_recent_bot_outbound_does_not_trigger_handoff(db_session):
         now=NOW,
     )
     assert result.action == "received"
+
+
+async def test_high_confidence_reschedule_returns_stub_reply(db_session):
+    """Cycle 4: parser returns RESCHEDULE with conf >= 0.7 → stub reply + outbound_bot row."""
+    from sqlalchemy import select
+
+    from app.db.models import ChatMessage
+
+    tutor = await _make_connected_tutor(db_session, tg_id=9001, conn_id="conn_r1")
+    stub = _StubParser(
+        IntentResult(
+            kind=IntentKind.RESCHEDULE,
+            confidence=0.92,
+            raw_text="перенеси на завтра",
+        )
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_r1",
+        telegram_message_id=400,
+        from_user_id=88888,
+        chat_id=88888,
+        text="перенеси на завтра",
+        now=NOW,
+        parser=stub,
+    )
+    assert result.action == "reschedule_pending"
+    assert result.reply_text is not None
+    outbound = (
+        await db_session.execute(
+            select(ChatMessage).where(
+                ChatMessage.business_connection_id == "conn_r1",
+                ChatMessage.direction == "outbound_bot",
+            )
+        )
+    ).scalar_one()
+    assert outbound.intent == "reschedule"
+    assert outbound.confidence == 0.92
+
+
+async def test_high_confidence_cancel_returns_stub_reply(db_session):
+    """Cycle 4: parser returns CANCEL with conf >= 0.7 → cancel stub reply."""
+    tutor = await _make_connected_tutor(db_session, tg_id=9002, conn_id="conn_c1")
+    stub = _StubParser(
+        IntentResult(kind=IntentKind.CANCEL, confidence=0.85, raw_text="отмени")
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_c1",
+        telegram_message_id=401,
+        from_user_id=88889,
+        chat_id=88889,
+        text="отмени занятие сегодня",
+        now=NOW,
+        parser=stub,
+    )
+    assert result.action == "cancel_pending"
+    assert result.reply_text is not None
+
+
+async def test_low_confidence_routes_to_review(db_session):
+    """Cycle 4: low confidence on any intent → silent, action='needs_tutor_review'."""
+    tutor = await _make_connected_tutor(db_session, tg_id=9003, conn_id="conn_lc")
+    stub = _StubParser(
+        IntentResult(kind=IntentKind.RESCHEDULE, confidence=0.4, raw_text="мб завтра?")
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_lc",
+        telegram_message_id=402,
+        from_user_id=88890,
+        chat_id=88890,
+        text="мб завтра?",
+        now=NOW,
+        parser=stub,
+    )
+    assert result.action == "needs_tutor_review"
+    assert result.reply_text is None
+
+
+async def test_unknown_intent_routes_to_review(db_session):
+    """Cycle 4: UNKNOWN intent → silent, route to tutor review."""
+    tutor = await _make_connected_tutor(db_session, tg_id=9004, conn_id="conn_un")
+    stub = _StubParser(
+        IntentResult(kind=IntentKind.UNKNOWN, confidence=1.0, raw_text="привет")
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_un",
+        telegram_message_id=403,
+        from_user_id=88891,
+        chat_id=88891,
+        text="привет",
+        now=NOW,
+        parser=stub,
+    )
+    assert result.action == "needs_tutor_review"
+    assert result.reply_text is None
+
+
+async def test_question_intent_routes_to_review(db_session):
+    """Cycle 4: QUESTION intent → silent (we don't auto-answer subject questions)."""
+    tutor = await _make_connected_tutor(db_session, tg_id=9005, conn_id="conn_q")
+    stub = _StubParser(
+        IntentResult(
+            kind=IntentKind.QUESTION,
+            confidence=0.95,
+            raw_text="как решать дискриминант?",
+        )
+    )
+    result = await handle_business_message(
+        session=db_session,
+        connection_id="conn_q",
+        telegram_message_id=404,
+        from_user_id=88892,
+        chat_id=88892,
+        text="как решать дискриминант?",
+        now=NOW,
+        parser=stub,
+    )
+    assert result.action == "needs_tutor_review"
 
 
 async def test_second_message_from_same_user_reuses_student(db_session):
