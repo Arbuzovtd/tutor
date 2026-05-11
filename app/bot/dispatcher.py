@@ -8,6 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from app.bot.deps import build_intent_parser
 from app.bot.middlewares.db import DbSessionMiddleware
 from app.bot.routers import business as business_router
 from app.bot.routers import onboarding as onboarding_router
@@ -38,7 +39,10 @@ def make_bot() -> Bot:
 
 
 def make_dispatcher() -> Dispatcher:
-    dp = Dispatcher(storage=MemoryStorage())
+    # Parser is shared across handlers (stateless wrapper over AsyncOpenAI).
+    # None when OPENAI_API_KEY missing — engine then logs without auto-replying.
+    parser = build_intent_parser()
+    dp = Dispatcher(storage=MemoryStorage(), parser=parser)
 
     # Inject AsyncSession into every handler that asks for `session: AsyncSession`.
     # Cover both regular updates and business updates — Telegram delivers them
