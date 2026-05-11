@@ -1,12 +1,13 @@
 """Repository for Lesson — scheduled tutoring sessions linked to calendar events."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Lesson
+from app.db.models import Lesson, Student
 
 
 class LessonRepository:
@@ -50,6 +51,30 @@ class LessonRepository:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_for_tutor_on_date(
+        self, *, tutor_id: int, date_local: date, tz_name: str
+    ) -> list[tuple[Lesson, Student]]:
+        """Lessons whose scheduled_at falls on `date_local` in timezone `tz_name`.
+
+        Returns pairs (lesson, student) so the caller can show student names
+        without an N+1 follow-up.
+        """
+        tz = ZoneInfo(tz_name)
+        start_local = datetime.combine(date_local, time.min, tzinfo=tz)
+        end_local = start_local + timedelta(days=1)
+        stmt = (
+            select(Lesson, Student)
+            .join(Student, Lesson.student_id == Student.id)
+            .where(
+                Lesson.tutor_id == tutor_id,
+                Lesson.scheduled_at >= start_local,
+                Lesson.scheduled_at < end_local,
+            )
+            .order_by(Lesson.scheduled_at.asc())
+        )
+        result = await self.session.execute(stmt)
+        return [(lesson, student) for lesson, student in result.all()]
 
     async def update_status(self, lesson_id: int, status: str) -> Lesson | None:
         lesson = await self.session.get(Lesson, lesson_id)

@@ -22,5 +22,8 @@ def build_intent_parser(settings: Settings | None = None) -> IntentParser | None
     if settings.openai_api_key is None:
         log.info("OPENAI_API_KEY not configured — running without intent parser")
         return None
-    client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+    client = AsyncOpenAI(
+        api_key=settings.openai_api_key.get_secret_value(),
+        base_url=settings.openai_base_url,
+    )
     return IntentParser(OpenAICompleter(client=client, model=settings.openai_model))

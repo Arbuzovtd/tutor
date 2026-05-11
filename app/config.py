@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4o"
+    openai_base_url: str | None = None  # set to e.g. https://api.polza.ai/v1 for compatible gateways
 
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None

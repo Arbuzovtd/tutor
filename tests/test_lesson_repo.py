@@ -99,3 +99,62 @@ async def test_update_status_changes_field(db_session):
 async def test_update_status_missing_returns_none(db_session):
     repo = LessonRepository(db_session)
     assert await repo.update_status(999_999, "cancelled") is None
+
+
+async def test_list_for_tutor_on_date_uses_tutor_timezone(db_session):
+    """A lesson at 22:00 UTC on May 11 = 01:00 Moscow on May 12,
+    so /today on May 12 (Moscow) should include it."""
+    from datetime import date
+
+    tutor, student = await _make_tutor_and_student(
+        db_session, tg_tutor=4101, tg_student=4102
+    )
+    repo = LessonRepository(db_session)
+    # 22:00 UTC May 11 = 01:00 MSK May 12
+    await repo.create(
+        tutor_id=tutor.id,
+        student_id=student.id,
+        scheduled_at=datetime(2026, 5, 11, 22, 0, tzinfo=timezone.utc),
+    )
+    rows = await repo.list_for_tutor_on_date(
+        tutor_id=tutor.id, date_local=date(2026, 5, 12), tz_name="Europe/Moscow"
+    )
+    assert len(rows) == 1
+    lesson, _ = rows[0]
+    assert lesson.scheduled_at.astimezone(timezone.utc).hour == 22
+
+
+async def test_list_for_tutor_on_date_isolates_per_tutor(db_session):
+    """Other tutors' lessons must not show up."""
+    from datetime import date
+
+    tutor_a, student_a = await _make_tutor_and_student(
+        db_session, tg_tutor=4201, tg_student=4202
+    )
+    tutor_b, student_b = await _make_tutor_and_student(
+        db_session, tg_tutor=4203, tg_student=4204
+    )
+    repo = LessonRepository(db_session)
+    when = datetime(2026, 5, 12, 10, 0, tzinfo=timezone.utc)
+    await repo.create(tutor_id=tutor_a.id, student_id=student_a.id, scheduled_at=when)
+    await repo.create(tutor_id=tutor_b.id, student_id=student_b.id, scheduled_at=when)
+
+    rows = await repo.list_for_tutor_on_date(
+        tutor_id=tutor_a.id, date_local=date(2026, 5, 12), tz_name="Europe/Moscow"
+    )
+    assert len(rows) == 1
+    _, student = rows[0]
+    assert student.id == student_a.id
+
+
+async def test_list_for_tutor_on_date_empty(db_session):
+    from datetime import date
+
+    tutor, _ = await _make_tutor_and_student(
+        db_session, tg_tutor=4301, tg_student=4302
+    )
+    repo = LessonRepository(db_session)
+    rows = await repo.list_for_tutor_on_date(
+        tutor_id=tutor.id, date_local=date(2026, 5, 12), tz_name="Europe/Moscow"
+    )
+    assert rows == []
