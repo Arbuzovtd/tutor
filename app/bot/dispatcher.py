@@ -15,8 +15,10 @@ from app.bot.routers import business as business_router
 from app.bot.routers import onboarding as onboarding_router
 from app.bot.routers import review as review_router
 from app.bot.routers import tutor_cmds as tutor_cmds_router
+from app.bot.routers.business import process_message_burst
 from app.config import get_settings
 from app.db.session import AsyncSessionLocal
+from app.services.debouncer import InboundDebouncer
 
 log = logging.getLogger(__name__)
 
@@ -40,11 +42,23 @@ def make_bot() -> Bot:
     )
 
 
-def make_dispatcher() -> Dispatcher:
-    # Parser is shared across handlers (stateless wrapper over AsyncOpenAI).
-    # None when OPENAI_API_KEY missing — engine then logs without auto-replying.
+def make_dispatcher(bot: Bot) -> tuple[Dispatcher, InboundDebouncer]:
+    """Build the dispatcher and the inbound debouncer.
+
+    Returns both so main.py can flush_all() on shutdown.
+    """
     parser = build_intent_parser()
-    dp = Dispatcher(storage=MemoryStorage(), parser=parser)
+
+    async def _on_burst_quiet(**kwargs) -> None:
+        await process_message_burst(
+            bot=bot,
+            session_factory=AsyncSessionLocal,
+            parser=parser,
+            **kwargs,
+        )
+
+    debouncer = InboundDebouncer(_on_burst_quiet)
+    dp = Dispatcher(storage=MemoryStorage(), parser=parser, debouncer=debouncer)
 
     # Rate limit BEFORE db session — reject floods without opening a transaction.
     dp.update.outer_middleware(RateLimitMiddleware())
@@ -63,4 +77,4 @@ def make_dispatcher() -> Dispatcher:
     dp.include_router(review_router.router)
     dp.include_router(business_router.router)
 
-    return dp
+    return dp, debouncer

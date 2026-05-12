@@ -3,22 +3,23 @@
 business_connection: persist tutor + connection so business_message handlers can
 resolve them.
 
-business_message: delegate to the reschedule engine. The engine is the single
-source of truth for auth gating, idempotency, handoff detection, and intent
-routing — see `app/services/reschedule.py`.
+business_message: do null/idempotency-ish guards, then push to InboundDebouncer.
+When a sender's burst quiets down (default 4s), the debouncer calls
+`process_message_burst` which runs the reschedule engine and sends Telegram replies.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
 
-from aiogram import Router
+from aiogram import Bot, Router
 from aiogram.types import BusinessConnection, Message
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.routers.review import build_review_keyboard
 from app.db.repositories.business_connection import BusinessConnectionRepository
 from app.db.repositories.tutor import TutorRepository
+from app.services.debouncer import InboundDebouncer
 from app.services.reschedule import IntentParserProtocol, handle_business_message
 
 log = logging.getLogger(__name__)
@@ -27,12 +28,7 @@ router = Router(name="business")
 
 @router.business_connection()
 async def on_business_connection(event: BusinessConnection, session: AsyncSession) -> None:
-    """Tutor connected/disconnected the bot or changed permissions in Telegram Business.
-
-    We always store the connection so that when an unregistered user later
-    completes /start onboarding, we already have their connection_id ready.
-    But until they finish onboarding, business_message handlers ignore them.
-    """
+    """Tutor connected/disconnected the bot or changed permissions in Telegram Business."""
     tutor, created = await TutorRepository(session).get_or_create(tg_user_id=event.user.id)
     if created:
         log.info(
@@ -61,10 +57,9 @@ async def on_business_connection(event: BusinessConnection, session: AsyncSessio
 @router.business_message()
 async def on_business_message(
     message: Message,
-    session: AsyncSession,
-    parser: IntentParserProtocol | None = None,
+    debouncer: InboundDebouncer,
 ) -> None:
-    """Hand off to the reschedule engine; only send a reply if engine produced one."""
+    """Push the inbound message onto the per-sender debouncer."""
     if (
         message.business_connection_id is None
         or message.text is None
@@ -72,34 +67,69 @@ async def on_business_message(
     ):
         return
 
-    result = await handle_business_message(
-        session=session,
+    await debouncer.submit(
         connection_id=message.business_connection_id,
-        telegram_message_id=message.message_id,
-        from_user_id=message.from_user.id,
+        sender_id=message.from_user.id,
         chat_id=message.chat.id,
+        telegram_message_id=message.message_id,
         text=message.text,
-        now=datetime.now(timezone.utc),
-        parser=parser,
     )
+
+
+async def process_message_burst(
+    *,
+    bot: Bot,
+    session_factory: async_sessionmaker,
+    parser: IntentParserProtocol | None,
+    connection_id: str,
+    sender_id: int,
+    chat_id: int,
+    telegram_message_id: int,
+    text: str,
+) -> None:
+    """Called by InboundDebouncer when a sender's burst quiets down.
+
+    Opens its own session because the debouncer fires outside any aiogram
+    update lifecycle — the original DbSessionMiddleware session is long gone.
+    """
+    async with session_factory() as session:
+        try:
+            result = await handle_business_message(
+                session=session,
+                connection_id=connection_id,
+                telegram_message_id=telegram_message_id,
+                from_user_id=sender_id,
+                chat_id=chat_id,
+                text=text,
+                now=datetime.now(timezone.utc),
+                parser=parser,
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
     log.info(
-        "business_message handled: connection=%s msg=%s action=%s reply=%s",
-        message.business_connection_id,
-        message.message_id,
+        "burst processed: connection=%s last_msg=%s action=%s reply=%s",
+        connection_id,
+        telegram_message_id,
         result.action,
         bool(result.reply_text),
     )
 
     if result.reply_text is not None:
-        await message.bot.send_message(
-            chat_id=message.chat.id,
-            business_connection_id=message.business_connection_id,
-            text=result.reply_text,
-        )
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                business_connection_id=connection_id,
+                text=result.reply_text,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not send student ack: %s", exc)
 
     if result.tutor_notification is not None:
         try:
-            await message.bot.send_message(
+            await bot.send_message(
                 chat_id=result.tutor_notification.tutor_telegram_id,
                 text=result.tutor_notification.text,
                 reply_markup=build_review_keyboard(
@@ -107,7 +137,6 @@ async def on_business_message(
                 ),
             )
         except Exception as exc:  # noqa: BLE001
-            # Tutor may not have started a chat with the bot yet (no DM possible).
             log.warning(
                 "could not ping tutor tg_id=%s: %s",
                 result.tutor_notification.tutor_telegram_id,

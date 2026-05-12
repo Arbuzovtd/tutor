@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     bot = make_bot()
-    dp = make_dispatcher()
+    dp, debouncer = make_dispatcher(bot)
     me = await bot.get_me()
     log.info("Starting bot @%s (id=%s); allowed_updates=%s", me.username, me.id, ALLOWED_UPDATES)
 
@@ -45,6 +45,11 @@ async def lifespan(_: FastAPI):
     finally:
         log.info("Stopping bot polling and scheduler")
         scheduler.shutdown(wait=False)
+        # Drain any pending debounced bursts so we don't lose buffered text
+        try:
+            await debouncer.flush_all()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("debouncer flush failed during shutdown: %s", exc)
         await dp.stop_polling()
         polling_task.cancel()
         try:
