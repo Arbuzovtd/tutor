@@ -1,0 +1,40 @@
+# venv & build artifacts
+.venv
+__pycache__
+*.pyc
+*.pyo
+build/
+dist/
+*.egg-info
+
+# tests & coverage
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# git
+.git/
+.gitignore
+.gitattributes
+
+# local dev
+.env
+.env.local
+*.pem
+
+# docs & planning (not needed in runtime image)
+docs/
+.claude/
+spike/
+
+# CI / deploy meta
+.github/
+docker-compose.yml
+docker-compose.*.yml
+README.md
