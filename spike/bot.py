@@ -80,7 +80,7 @@ async def on_direct_start(message: Message) -> None:
     await message.answer(
         "Spike-bot is alive.\n\n"
         "Next step: enable Business Mode for me in @BotFather, then connect me "
-        "in Settings → Telegram Business → Chatbots."
+        "in Settings → My Account → Chat Automation (paste the bot link)."
     )
 
 

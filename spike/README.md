@@ -78,13 +78,13 @@ reply confirming it's alive.
 
 ## Step 5. Connect the bot to your Premium account
 
-On your tutor's Premium-enabled Telegram client:
+On your tutor's Premium-enabled Telegram client (May 2026 Business Mode UI):
 
 ```
 Settings (⚙️)
-→ Telegram Business
-→ Chatbots
-→ Bot Username: @<username>_spike_bot
+→ My Account
+→ Chat Automation
+→ paste the bot link (t.me/<username>_spike_bot)
 → Access: All Chats   (or "Excluding" / "Selected", anything that includes the
                        chat you'll test with)
 → Permissions: ✅ Reply to Messages

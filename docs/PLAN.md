@@ -128,7 +128,7 @@ c9fa1c1  feat(bot): wire aiogram into FastAPI with DB-gated registration
 
 ### Как восстановить business_connection
 
-**Вариант A (один клик):** Settings → Telegram Business → Chatbots → найти `@businessbot123bot` → переключить любую галку (например "Manage Messages") → Save. Это вызовет свежий `business_connection` update, наш handler сохранит запись в БД.
+**Вариант A (один клик):** Settings → My Account → Chat Automation → если бот уже подключён, переключить любое разрешение (например "Manage Messages") и Save. Если нет — вставить t.me/businessbot123bot. Это вызовет свежий `business_connection` update, наш handler сохранит запись в БД.
 
 **Вариант B (admin script):** написать `app/scripts/fetch_connection.py` который дёрнет `bot.get_business_connection(connection_id)` — мы знаем `connection_id` из логов спайка: `cmXe57RRAUgCGwAAo5heo8MDGGc`.
 

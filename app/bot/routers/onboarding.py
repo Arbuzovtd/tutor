@@ -97,8 +97,8 @@ async def onb_price(
         f"• Классы: {profile.get('grades')}\n"
         f"• Часы: {profile.get('working_hours')}\n"
         f"• Цена: {profile.get('price')}\n\n"
-        "Следующий шаг — подключить меня к твоему Telegram Business:\n"
-        "1. @BotFather → /mybots → (этот бот) → Bot Settings → Business Mode → Turn On\n"
-        "2. На своём Premium-аккаунте: Settings → Telegram Business → Chatbots → впиши username этого бота\n\n"
+        "Следующий шаг — подключить меня к твоему Premium-аккаунту:\n"
+        "Settings (⚙️) → Мой аккаунт → Chat Automation → вставь ссылку на бота "
+        "(t.me/<username>_этого_бота) → выбери чаты и разрешения → Save.\n\n"
         "Когда подключишь — я узнаю автоматически и напишу сюда."
     )
