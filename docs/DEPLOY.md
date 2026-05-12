@@ -8,12 +8,43 @@ The bot is packaged as a single Docker Compose stack: `bot` (FastAPI + aiogram p
 
 | Provider | Free tier | Setup difficulty | Notes |
 |---|---|---|---|
-| **Oracle Cloud Free Tier** | 2 ARM VMs, 24 GB RAM total, 200 GB disk — **always free** | Medium | Best for production. Needs credit card for verification. |
-| **Fly.io** | $5/mo credit (≈free for tiny apps) | Easy | Smaller free quota now, but enough for one tutor. |
-| **Hetzner CX22** | €4.5/mo | Easy | Cheapest reliable VPS in EU. |
-| **Selectel / Timeweb / VK Cloud** | ₽200–400/mo | Easy | Russian providers, RUB payment. |
+| **Cloud.ru Evolution** | 1 vCPU, 1 GB RAM, 30 GB SSD — **always free** | Easy | RU юрисдикция, регистрация по паспорту. Compose уже затюнен под 1 GB. |
+| **Oracle Cloud Free Tier** | 2 ARM VMs, 24 GB RAM total, 200 GB disk — always free | Medium | Лучше всех по ресурсам. Нужна **не-РФ** карта для верификации. |
+| **Yandex Cloud trial** | ₽4000 грант на 60 дней | Easy | После — ~₽600/мес. |
+| **Hetzner CX22** | €4.5/mo | Easy | Не бесплатно, но самый дешёвый EU VPS. |
 
-Oracle Cloud Free Tier is the recommended starting point for a free MVP. Everything else in this doc applies identically.
+The defaults in `docker-compose.yml` are tuned for 1 GB RAM (Cloud.ru baseline). On larger VMs you can drop the `mem_limit:` lines and raise Postgres' `shared_buffers`.
+
+---
+
+## Cloud.ru Evolution (recommended free path)
+
+### Регистрация
+
+1. Зайти на **cloud.ru** → «Войти/Регистрация» → создать аккаунт по СберID или e-mail/телефону.
+2. Подтвердить личность (паспорт РФ) — это нужно для всех клиентов, даже free tier.
+3. Привязать рублёвую карту: бесплатные ресурсы списываний не дают, но карта обязательна для активации Free Tier.
+4. В консоли: **Evolution Free Tier** → активировать. Выдадут квоту: 1 vCPU + 1 GB RAM + 30 GB SSD навсегда.
+
+### Создание VM
+
+В разделе **Evolution → Виртуальные машины**:
+
+```
+Образ:        Ubuntu 22.04 LTS
+Конфигурация: 1 vCPU / 1 GB / 30 GB SSD  (Free Tier)
+Сеть:         Public IPv4 (один на free)
+SSH-ключ:     загрузить свой публичный ключ (~/.ssh/id_ed25519.pub)
+Firewall:     открыть только 22/tcp (SSH). Бот работает на polling — входящих портов не нужно.
+```
+
+После создания получишь публичный IP. SSH:
+
+```bash
+ssh ubuntu@<vm-ip>
+```
+
+### Дальше → блок "One-time VPS setup" ниже одинаков для Cloud.ru и любых других провайдеров.
 
 ---
 
@@ -27,11 +58,28 @@ Oracle Cloud Free Tier is the recommended starting point for a free MVP. Everyth
    sudo usermod -aG docker $USER
    newgrp docker
    ```
-4. **Clone the repo**:
+4. **Get the code onto the VM** — pick one:
+
+   **A) Прямой SCP с локальной машины (быстрый старт, без GitHub):**
    ```bash
+   # На локальной машине, в корне репо:
+   sudo mkdir -p /opt && sudo chown $USER /opt   # на VM, не локально
+   # Запусти на локали:
+   tar --exclude='.venv' --exclude='__pycache__' --exclude='.pytest_cache' \
+       --exclude='.coverage' --exclude='.git' --exclude='backups' \
+       -czf /tmp/tutorbot.tar.gz -C /home/ser/my_projects/tutor_automation .
+   scp /tmp/tutorbot.tar.gz ubuntu@<vm-ip>:/opt/
+   ssh ubuntu@<vm-ip> 'mkdir -p /opt/tutorbot && tar -xzf /opt/tutorbot.tar.gz -C /opt/tutorbot'
+   ```
+
+   **B) Через GitHub** (удобно для обновлений):
+   ```bash
+   # Создай приватный репо на github.com, потом:
+   git remote add origin git@github.com:<user>/tutor_automation.git
+   git push -u origin master
+   # На VM:
    sudo mkdir -p /opt && sudo chown $USER /opt
-   cd /opt
-   git clone <your-repo-url> tutorbot
+   cd /opt && git clone git@github.com:<user>/tutor_automation.git tutorbot
    cd tutorbot
    ```
 5. **Configure environment**:

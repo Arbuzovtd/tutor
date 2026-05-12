@@ -6,6 +6,21 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-tutorbot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-tutorbot}
+    # Tuned for a 1 GB-RAM Free Tier VM (Cloud.ru Evolution, etc.). The
+    # defaults reserve ~150 MB of shared memory — too much for such a small
+    # host. These overrides bring total Postgres footprint to ~80 MB.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - max_connections=20
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -13,6 +28,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    mem_limit: 256m
     # No host port — only the bot service can reach it via the docker network.
 
   bot:
@@ -35,6 +51,7 @@ services:
     ports:
       # Healthcheck only — never expose 8000 publicly.
       - "127.0.0.1:8000:8000"
+    mem_limit: 512m
     logging:
       driver: json-file
       options:
