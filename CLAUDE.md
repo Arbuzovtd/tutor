@@ -134,14 +134,15 @@ DB URL must be the **asyncpg** dialect: `postgresql+asyncpg://...` — Alembic a
 
 ## Deployment
 
-**Current state:** Docker Compose stack (`bot` + `db`) tuned for 1 GB VMs. `scripts/deploy.sh` builds image, brings stack up, waits for `/healthz`. `scripts/backup.sh` does nightly `pg_dump` to `./backups/` with 14-day retention. The container `entrypoint.sh` runs `alembic upgrade head` then `uvicorn` on port 8000.
+**Production: Railway**, GitHub repo `Arbuzovtd/tutor`, branch `main`. Bot username is `@businessbot123bot`. Railway config lives in `railway.json` (Dockerfile builder, `/healthz` healthcheck, restart on failure). Managed Postgres add-on is referenced via `${{Postgres.DATABASE_URL}}` in the bot service Variables; `scripts/entrypoint.sh` normalizes the `postgresql://` URL into `postgresql+asyncpg://` and binds uvicorn to `$PORT`. Migrations run on every container start. Step-by-step in `docs/RAILWAY.md`.
 
-**Target: Railway.** Not yet wired. When migrating: replace `docker-compose.yml`'s `db` service with Railway's managed Postgres add-on (set `DATABASE_URL`), have the bot service read `$PORT` for uvicorn, and keep the same `entrypoint.sh` (migrations on every boot). Long-polling is outbound-only so no public ingress is required for Telegram, but Railway needs the health port exposed.
+**Self-hosted fallback:** `docker-compose.yml` + `Dockerfile` + `scripts/deploy.sh` + `scripts/backup.sh` still work for any VPS (Oracle Free Tier / Hetzner / Cloud.ru). See `docs/DEPLOY.md`. Railway ignores the compose file.
 
 ## Conventions
 
 - **Tests first.** TDD across all phases — coverage stays high (`pytest --cov=app`).
 - **Async everywhere:** SQLAlchemy 2 async, asyncpg, aiogram 3.x. No sync DB calls anywhere.
 - **Repositories own queries**; routers/services consume them — do not call `session.execute(select(...))` from a router.
+- **HTML parse_mode is global.** `Bot(default=DefaultBotProperties(parse_mode=ParseMode.HTML))` — every `message.answer(...)` string is parsed as HTML by Telegram. Literal `<word>` inside any user-facing text crashes the send with `Bad Request: Unsupported start tag "word"` and the handler raises *after* its DB transaction has committed (silent failure for the user). When inserting placeholders or user data into reply text, either substitute the real value (e.g., `await message.bot.me()` for bot username) or HTML-escape with `&lt;` / `&gt;`.
 - **Don't add new top-level dirs without updating Dockerfile + `.dockerignore`** (only `app/`, `alembic/`, `alembic.ini`, `scripts/entrypoint.sh` are copied into the runtime image).
 - **`spike/`** is leftover Phase 0 throwaway code — do not import from it.
