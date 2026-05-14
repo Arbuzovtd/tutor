@@ -91,6 +91,8 @@ async def onb_price(
     )
     log.info("Onboarding completed for tutor_id=%s", tutor.id)
 
+    me = await message.bot.me()
+    bot_link = f"t.me/{me.username}"
     await message.answer(
         "Записал.\n\n"
         f"• Предметы: {profile.get('subjects')}\n"
@@ -98,7 +100,7 @@ async def onb_price(
         f"• Часы: {profile.get('working_hours')}\n"
         f"• Цена: {profile.get('price')}\n\n"
         "Следующий шаг — подключить меня к твоему Premium-аккаунту:\n"
-        "Settings (⚙️) → Мой аккаунт → Chat Automation → вставь ссылку на бота "
-        "(t.me/<username>_этого_бота) → выбери чаты и разрешения → Save.\n\n"
+        f"Settings (⚙️) → Мой аккаунт → Chat Automation → вставь ссылку на бота "
+        f"{bot_link} → выбери чаты и разрешения → Save.\n\n"
         "Когда подключишь — я узнаю автоматически и напишу сюда."
     )

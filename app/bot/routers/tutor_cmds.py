@@ -52,9 +52,15 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext) 
         )
         return
 
+    me = await message.bot.me()
+    bot_link = f"t.me/{me.username}"
     await message.answer(
-        f"С возвращением. Onboarding: {tutor.onboarding_status}. "
-        "Команды: /help."
+        "С возвращением. Анкета заполнена.\n\n"
+        "Следующий шаг — подключить меня к твоему Premium-аккаунту:\n"
+        f"Settings (⚙️) → Мой аккаунт → Chat Automation → вставь ссылку на бота "
+        f"{bot_link} → выбери чаты и разрешения → Save.\n\n"
+        "Когда подключишь — я узнаю автоматически и напишу сюда.\n\n"
+        "Все команды: /help"
     )
 
 
