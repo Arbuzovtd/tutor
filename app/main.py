@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from app.bot.dispatcher import ALLOWED_UPDATES, make_bot, make_dispatcher
+from app.bot.dispatcher import ALLOWED_UPDATES, BOT_COMMANDS, make_bot, make_dispatcher
 from app.config import get_settings
 from app.db.session import engine
 from app.services.scheduler import make_scheduler
@@ -30,6 +30,13 @@ async def lifespan(_: FastAPI):
     dp, debouncer = make_dispatcher(bot)
     me = await bot.get_me()
     log.info("Starting bot @%s (id=%s); allowed_updates=%s", me.username, me.id, ALLOWED_UPDATES)
+
+    # Publish the command list so Telegram shows them in the "/" autocomplete.
+    try:
+        await bot.set_my_commands(BOT_COMMANDS)
+        log.info("Published %d bot commands to Telegram", len(BOT_COMMANDS))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("set_my_commands failed: %s", exc)
 
     polling_task = asyncio.create_task(
         dp.start_polling(bot, allowed_updates=ALLOWED_UPDATES, handle_signals=False),

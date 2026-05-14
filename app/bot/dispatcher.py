@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
 
 from app.bot.deps import build_intent_parser
 from app.bot.middlewares.db import DbSessionMiddleware
@@ -21,6 +22,22 @@ from app.db.session import AsyncSessionLocal
 from app.services.debouncer import InboundDebouncer
 
 log = logging.getLogger(__name__)
+
+# Commands shown in Telegram's "/" autocomplete menu over the input field.
+# Published once on startup via setMyCommands.
+BOT_COMMANDS: list[BotCommand] = [
+    BotCommand(command="start", description="Начать или возобновить настройку"),
+    BotCommand(command="today", description="Расписание на сегодня"),
+    BotCommand(command="lessons", description="Ближайшие уроки"),
+    BotCommand(command="students", description="Список учеников"),
+    BotCommand(command="summary", description="Утренняя сводка"),
+    BotCommand(command="block", description="Добавить личный блок времени"),
+    BotCommand(command="blocks", description="Все активные блоки"),
+    BotCommand(command="unblock", description="Удалить блок по id"),
+    BotCommand(command="cancel", description="Прервать текущий шаг"),
+    BotCommand(command="help", description="Справка"),
+]
+
 
 # Updates we explicitly request from Telegram. Business updates are not
 # delivered by default in long-polling.
