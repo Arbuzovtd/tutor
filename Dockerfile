@@ -52,7 +52,9 @@ USER tutorbot
 
 EXPOSE 8000
 
+# Healthcheck runs inside the container against the local listener.
+# On Railway the runtime port comes from $PORT; falls back to 8000 elsewhere.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS http://localhost:8000/healthz || exit 1
+    CMD curl -fsS "http://localhost:${PORT:-8000}/healthz" || exit 1
 
 CMD ["./entrypoint.sh"]
