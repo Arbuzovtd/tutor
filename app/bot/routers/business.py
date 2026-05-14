@@ -13,6 +13,7 @@ import logging
 from datetime import datetime, timezone
 
 from aiogram import Bot, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BusinessConnection, Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,7 +28,9 @@ router = Router(name="business")
 
 
 @router.business_connection()
-async def on_business_connection(event: BusinessConnection, session: AsyncSession) -> None:
+async def on_business_connection(
+    event: BusinessConnection, session: AsyncSession, bot: Bot
+) -> None:
     """Tutor connected/disconnected the bot or changed permissions in Telegram Business."""
     tutor, created = await TutorRepository(session).get_or_create(tg_user_id=event.user.id)
     if created:
@@ -37,12 +40,13 @@ async def on_business_connection(event: BusinessConnection, session: AsyncSessio
             event.user.id,
         )
 
+    can_reply = getattr(event, "can_reply", True)
     bc = await BusinessConnectionRepository(session).upsert(
         tutor_id=tutor.id,
         connection_id=event.id,
         user_chat_id=event.user_chat_id,
         is_enabled=event.is_enabled,
-        can_reply=getattr(event, "can_reply", True),
+        can_reply=can_reply,
     )
     log.info(
         "business_connection upserted: id=%s tutor_id=%s registered=%s enabled=%s can_reply=%s",
@@ -52,6 +56,45 @@ async def on_business_connection(event: BusinessConnection, session: AsyncSessio
         bc.is_enabled,
         bc.can_reply,
     )
+
+    # Acknowledge to the tutor in their DM with the bot. Without this the
+    # tutor sees nothing after connecting Business Mode and assumes the bot
+    # is broken. event.user_chat_id is the DM chat we can write to.
+    if event.is_enabled:
+        if not tutor.is_registered:
+            ack = (
+                "Подключение установлено, но регистрация ещё не пройдена.\n\n"
+                "Нажми /start, чтобы заполнить анкету (предметы, классы, "
+                "часы, цена) — без неё я не смогу отвечать ученикам."
+            )
+        elif not can_reply:
+            ack = (
+                "Подключение установлено, но я не могу отвечать ученикам "
+                "от твоего имени.\n\n"
+                "В Settings → Мой аккаунт → Chat Automation проверь, "
+                "что разрешение «Reply to messages» включено."
+            )
+        else:
+            ack = (
+                "Подключение установлено. Я готов отвечать ученикам.\n\n"
+                "Когда ученик попросит перенести или отменить занятие — "
+                "я пришлю тебе сюда карточку с кнопками ✅/❌; одного "
+                "нажатия достаточно. Все команды: /help"
+            )
+    else:
+        ack = "Бот отключён от Business-аккаунта. Если это случайно — подключи снова."
+
+    try:
+        await bot.send_message(chat_id=event.user_chat_id, text=ack)
+    except TelegramAPIError as exc:
+        # Most common reason: user never opened a chat with the bot, so DMs
+        # are unreachable until they /start once. Log and continue.
+        log.warning(
+            "Could not send connection ack to tutor_id=%s chat=%s: %s",
+            tutor.id,
+            event.user_chat_id,
+            exc,
+        )
 
 
 @router.business_message()
