@@ -26,6 +26,18 @@ log = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    settings = get_settings()
+    if (
+        settings.openai_api_key is not None
+        and not settings.openai_base_url
+        and settings.openai_api_key.get_secret_value().startswith("pza_")
+    ):
+        log.warning(
+            "Polza API key detected (pza_...) but OPENAI_BASE_URL is empty — "
+            "SDK will call api.openai.com and every intent call will 401. "
+            "Set OPENAI_BASE_URL=https://api.polza.ai/v1 in environment."
+        )
+
     bot = make_bot()
     dp, debouncer = make_dispatcher(bot)
     me = await bot.get_me()
