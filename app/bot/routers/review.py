@@ -13,6 +13,7 @@ final reply to the student through the business chat.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import ChatMessage, Student
 from app.db.repositories.audit_log import AuditLogRepository
 from app.db.repositories.chat_message import ChatMessageRepository
+from app.db.repositories.lesson import LessonRepository
 from app.db.repositories.tutor import TutorRepository
 
 # Hard upper bound on chat_message_id from callback_data — guards against
@@ -144,6 +146,52 @@ async def _resolve(
         action=action,
         payload={"chat_message_id": chat_message_id},
     )
+
+    # On approve: if the original intent was a reschedule with a concrete
+    # new datetime, land it in the lessons table so /today actually shows it.
+    # The pending_review audit row written by reschedule.py is our source of
+    # truth — it captures the parsed intent kind and datetimes at decision time.
+    if action == "approved":
+        pending = await AuditLogRepository(session).get_latest_pending_review(
+            tutor_id=clicker.id, chat_message_id=chat_message_id
+        )
+        pending_payload = pending.payload_json if pending is not None else None
+        if pending_payload and pending_payload.get("intent") == "reschedule":
+            new_dt_iso = pending_payload.get("new_datetime")
+            if isinstance(new_dt_iso, str) and new_dt_iso:
+                try:
+                    scheduled_at = datetime.fromisoformat(new_dt_iso)
+                except (ValueError, TypeError):
+                    log.warning(
+                        "Bad new_datetime in pending_review id=%s: %r",
+                        pending.id,
+                        new_dt_iso,
+                    )
+                else:
+                    # Lesson.scheduled_at is TIMESTAMP WITH TIME ZONE; a naive
+                    # value would be interpreted as server-local (UTC on Railway,
+                    # variable on dev). Force UTC if parser ever emits naive.
+                    if scheduled_at.tzinfo is None:
+                        scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+                    lesson = await LessonRepository(session).create(
+                        tutor_id=clicker.id,
+                        student_id=inbound.student_id,
+                        scheduled_at=scheduled_at,
+                    )
+                    log.info(
+                        "Lesson created on approve: lesson_id=%s scheduled_at=%s "
+                        "student_id=%s from chat_message_id=%s",
+                        lesson.id,
+                        scheduled_at.isoformat(),
+                        inbound.student_id,
+                        chat_message_id,
+                    )
+            else:
+                log.info(
+                    "Approved reschedule chat_message_id=%s has no new_datetime — "
+                    "not creating Lesson (intent was a slot request without target)",
+                    chat_message_id,
+                )
 
     if query.bot is not None:
         await query.bot.send_message(

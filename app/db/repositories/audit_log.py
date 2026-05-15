@@ -61,6 +61,26 @@ class AuditLogRepository:
         result = await self.session.execute(stmt)
         return int(result.scalar_one())
 
+    async def get_latest_pending_review(
+        self, *, tutor_id: int, chat_message_id: int
+    ) -> AuditLog | None:
+        """Return the most recent pending_review audit row for this inbound
+        message, if any. Used by the approve handler to recover the parsed
+        intent and datetimes captured at the moment we pinged the tutor.
+        """
+        stmt = (
+            select(AuditLog)
+            .where(
+                AuditLog.tutor_id == tutor_id,
+                AuditLog.action == "pending_review",
+                AuditLog.payload_json["chat_message_id"].astext == str(chat_message_id),
+            )
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def list_for_tutor(
         self, tutor_id: int, limit: int = 50
     ) -> list[AuditLog]:
