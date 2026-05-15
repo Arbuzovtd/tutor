@@ -101,8 +101,16 @@ async def on_business_connection(
 async def on_business_message(
     message: Message,
     debouncer: InboundDebouncer,
+    session: AsyncSession,
+    bot: Bot,
 ) -> None:
-    """Push the inbound message onto the per-sender debouncer."""
+    """Push the inbound message onto the per-sender debouncer.
+
+    If the BusinessConnection row is missing (e.g. the bot was offline when
+    Telegram delivered the original business_connection event), pull it from
+    the Bot API on demand so this message — and every following one — can be
+    processed normally instead of being silently dropped as unknown_connection.
+    """
     if (
         message.business_connection_id is None
         or message.text is None
@@ -110,8 +118,38 @@ async def on_business_message(
     ):
         return
 
+    connection_id = message.business_connection_id
+    bc = await BusinessConnectionRepository(session).get_by_connection_id(connection_id)
+    if bc is None:
+        try:
+            info = await bot.get_business_connection(
+                business_connection_id=connection_id
+            )
+        except TelegramAPIError as exc:
+            log.warning(
+                "BC recovery failed for %s (%s) — dropping message %s",
+                connection_id,
+                exc,
+                message.message_id,
+            )
+            return
+        tutor, _ = await TutorRepository(session).get_or_create(tg_user_id=info.user.id)
+        await BusinessConnectionRepository(session).upsert(
+            tutor_id=tutor.id,
+            connection_id=info.id,
+            user_chat_id=info.user_chat_id,
+            is_enabled=info.is_enabled,
+            can_reply=getattr(info, "can_reply", True),
+        )
+        log.info(
+            "BC recovered on-demand: id=%s tutor_id=%s registered=%s",
+            info.id,
+            tutor.id,
+            tutor.is_registered,
+        )
+
     await debouncer.submit(
-        connection_id=message.business_connection_id,
+        connection_id=connection_id,
         sender_id=message.from_user.id,
         chat_id=message.chat.id,
         telegram_message_id=message.message_id,
